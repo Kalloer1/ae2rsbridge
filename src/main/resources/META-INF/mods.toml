@@ -1,0 +1,47 @@
+modLoader="javafml"
+loaderVersion="${loader_version_range}"
+license="${mod_license}"
+issueTrackerURL="https://github.com/ae2rsbridge/ae2rsbridge/issues"
+
+[[mods]]
+modId="${mod_id}"
+version="${mod_version}"
+displayName="${mod_name}"
+authors="${mod_authors}"
+description='''
+${mod_description}
+
+Bidirectional storage bridge between Applied Energistics 2 and Refined Storage.
+- AE2 terminals can access RS disk storage
+- RS grids can access AE2 network storage
+- Only items and fluids are bridged (no gases, mana, etc.)
+- Acts as an energy converter between AE2 and Forge Energy (no self-consumption)
+'''
+
+[[dependencies.${mod_id}]]
+    modId="forge"
+    mandatory=true
+    versionRange="${forge_version_range}"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.${mod_id}]]
+    modId="minecraft"
+    mandatory=true
+    versionRange="${minecraft_version_range}"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.${mod_id}]]
+    modId="ae2"
+    mandatory=true
+    versionRange="[15.2.0,)"
+    ordering="AFTER"
+    side="BOTH"
+
+[[dependencies.${mod_id}]]
+    modId="refinedstorage"
+    mandatory=true
+    versionRange="[1.12.0,)"
+    ordering="AFTER"
+    side="BOTH"

@@ -1,0 +1,18 @@
+# === 构建产物 ===
+build/
+.gradle/
+**/build/
+**/.gradle/
+
+# === Forge 运行目录（gradlew runClient/runServer 生成）===
+run/
+
+# === IDE / 操作系统 ===
+*.iml
+.idea/
+*.log
+Thumbs.db
+.DS_Store
+
+# === 本地环境（可选，按需保留）===
+# 不忽略 libs/，因为本模组依赖本地 jar 才能编译

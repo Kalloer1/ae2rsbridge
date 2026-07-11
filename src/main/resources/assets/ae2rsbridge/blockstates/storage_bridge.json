@@ -1,0 +1,7 @@
+{
+    "variants": {
+        "": {
+            "model": "ae2rsbridge:block/storage_bridge"
+        }
+    }
+}

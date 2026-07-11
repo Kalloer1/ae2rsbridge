@@ -1,0 +1,23 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "FEF",
+    "EAE",
+    "FEF"
+  ],
+  "key": {
+    "F": {
+      "item": "ae2:fluix_glass_cable"
+    },
+    "E": {
+      "item": "refinedstorage:cable"
+    },
+    "A": {
+      "item": "ae2:energy_cell"
+    }
+  },
+  "result": {
+    "item": "ae2rsbridge:storage_bridge",
+    "count": 1
+  }
+}
