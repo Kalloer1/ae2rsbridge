@@ -27,6 +27,7 @@ public class AENetworkToRSFluidStorage implements IExternalStorage<FluidStack> {
     private final IActionSource actionSource;
     private boolean needsCacheInvalidation = false;
     private long cachedStored = -1;
+    private final KeyCounter reportedToRS = new KeyCounter();
 
     public AENetworkToRSFluidStorage(StorageBridgeBlockEntity bridge) {
         this.bridge = bridge;
@@ -147,6 +148,7 @@ public class AENetworkToRSFluidStorage implements IExternalStorage<FluidStack> {
             }
 
             KeyCounter counter = ae2Storage.getAvailableStacks();
+            reportedToRS.clear();
             for (Object2LongMap.Entry<AEKey> entry : counter) {
                 AEKey key = entry.getKey();
                 if (AEFluidKey.is(key)) {
@@ -155,6 +157,7 @@ public class AENetworkToRSFluidStorage implements IExternalStorage<FluidStack> {
                     if (amount > 0) {
                         int count = (int) Math.min(amount, Integer.MAX_VALUE);
                         stacks.add(fluidKey.toStack(count));
+                        reportedToRS.add(fluidKey, amount);
                     }
                 }
             }
@@ -164,6 +167,10 @@ public class AENetworkToRSFluidStorage implements IExternalStorage<FluidStack> {
                 BridgeTransactionGuard.end();
             }
         }
+    }
+
+    public KeyCounter getReportedToRS() {
+        return reportedToRS;
     }
 
     @Override

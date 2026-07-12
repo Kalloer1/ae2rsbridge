@@ -139,6 +139,14 @@ public class RSNetworkToAEStorage implements MEStorage {
             return;
         }
         try {
+            KeyCounter ae2ReportedToRS = new KeyCounter();
+            for (var entry : bridge.getAeToRsItemStorage().getReportedToRS()) {
+                ae2ReportedToRS.add(entry.getKey(), entry.getLongValue());
+            }
+            for (var entry : bridge.getAeToRsFluidStorage().getReportedToRS()) {
+                ae2ReportedToRS.add(entry.getKey(), entry.getLongValue());
+            }
+
             var itemCache = network.getItemStorageCache();
             if (itemCache != null) {
                 IStackList<ItemStack> itemList = itemCache.getList();
@@ -148,7 +156,12 @@ public class RSNetworkToAEStorage implements MEStorage {
                         if (stack != null && !stack.isEmpty()) {
                             AEItemKey key = AEItemKey.of(stack);
                             if (key != null) {
-                                out.add(key, stack.getCount());
+                                long rsAmount = stack.getCount();
+                                long ae2Amount = ae2ReportedToRS.get(key);
+                                long netAmount = rsAmount - ae2Amount;
+                                if (netAmount > 0) {
+                                    out.add(key, netAmount);
+                                }
                             }
                         }
                     }
@@ -164,7 +177,12 @@ public class RSNetworkToAEStorage implements MEStorage {
                         if (stack != null && !stack.isEmpty()) {
                             AEFluidKey key = AEFluidKey.of(stack);
                             if (key != null) {
-                                out.add(key, stack.getAmount());
+                                long rsAmount = stack.getAmount();
+                                long ae2Amount = ae2ReportedToRS.get(key);
+                                long netAmount = rsAmount - ae2Amount;
+                                if (netAmount > 0) {
+                                    out.add(key, netAmount);
+                                }
                             }
                         }
                     }
