@@ -73,14 +73,17 @@ neoForge {
 }
 
 dependencies {
-    // === 1.21.1 dependency jars (place in libs/ or use maven coordinates) ===
-    // AE2 for 1.21.1 — via Modrinth maven (verify version slug/id):
-    //   compileOnly "maven.modrinth:ae2:${ae2_version}"
-    // Refined Storage 2 (1.21.1, NeoForge) — full API rewrite vs 1.20.1:
-    //   compileOnly "maven.modrinth:refined-storage:${refinedstorage_version}"
-    //
-    // Until the 1.21.1 dep jars are wired up, the RS/AE2 integration
-    // sources will NOT compile against the old (1.20.1) API. See PORTING.md.
+    // === AE2 1.21.1 (NeoForge) — Maven Central, group org.appliedenergistics ===
+    // :api classifier = API-only jar for compile; full jar for dev runs.
+    compileOnly "org.appliedenergistics:appliedenergistics2:${ae2_version}:api"
+    runtimeOnly "org.appliedenergistics:appliedenergistics2:${ae2_version}"
+
+    // === Refined Storage 2 (RS2) 2.0.0 (NeoForge) ===
+    // 用本地反编译得到的 jar（maven.refinedmods.com 在本机构建环境 DNS 不通）。
+    // 在有网络的环境可改回:
+    //   compileOnly "com.refinedmods.refinedstorage:refinedstorage-neoforge:${refinedstorage_version}"
+    compileOnly files('libs/rs2-1.21.1.jar')
+    runtimeOnly files('libs/rs2-1.21.1.jar')
 }
 
 tasks.named('processResources', ProcessResources).configure {

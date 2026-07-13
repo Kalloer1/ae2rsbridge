@@ -1,121 +1,36 @@
 package com.ae2rsbridge.integration.rs;
 
-import com.ae2rsbridge.AE2RSBridge;
-import net.minecraftforge.fluids.FluidStack;
-import com.ae2rsbridge.blockentity.StorageBridgeBlockEntity;
-import com.refinedmods.refinedstorage.apiimpl.network.node.NetworkNode;
-import com.refinedmods.refinedstorage.api.network.INetwork;
-import com.refinedmods.refinedstorage.api.storage.IStorage;
-import com.refinedmods.refinedstorage.api.storage.IStorageProvider;
-import com.refinedmods.refinedstorage.apiimpl.network.node.ConnectivityStateChangeCause;
-import com.refinedmods.refinedstorage.apiimpl.storage.cache.FluidStorageCache;
-import com.refinedmods.refinedstorage.apiimpl.storage.cache.ItemStorageCache;
-import com.refinedmods.refinedstorage.util.LevelUtils;
-import net.minecraft.core.BlockPos;
-import net.minecraft.nbt.CompoundTag;
-import net.minecraft.resources.ResourceLocation;
-import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.level.Level;
-import com.refinedmods.refinedstorage.util.LevelUtils;
+import com.refinedmods.refinedstorage.api.network.impl.node.externalstorage.ExternalStorageNetworkNode;
 
-import javax.annotation.Nonnull;
-import java.util.List;
+/**
+ * RS2 网络节点：桥接方块在 RS 网络侧的承载节点。
+ * <p>
+ * 直接继承 RS2 的 {@link ExternalStorageNetworkNode}（它已实现 {@code StorageProvider}），
+ * 通过 {@link #initialize(ExternalStorageProvider)} 把由 AE2 支撑的
+ * {@link AE2NetworkToRSStorage} 注入为外部存储。RS2 会：
+ * <ul>
+ *     <li>自动管理节点生命周期（容器注册/注销、区块重载），无需旧版 RS1 的
+ *         {@code NetworkNodeManager}/{@code unloaded} 之类的 hack；</li>
+ *     <li>由 {@code ExternalStorage.detectChanges()} 做增量 diff 并把变化推送到 RS 网络
+ *         （含 RS 终端刷新），无需手写缓存差异推送；</li>
+ *     <li>在节点激活时把外部存储接入网络（{@code onActiveChanged}），未激活时断开。</li>
+ * </ul>
+ * 节点数（能量消耗）设为 0，能量由 AE2 侧以 FE 形式补充（见 BridgeEnergyStorage）。
+ */
+public class BridgeNetworkNode extends ExternalStorageNetworkNode {
 
-public class BridgeNetworkNode extends NetworkNode implements IStorageProvider {
-
-    public static final ResourceLocation ID = new ResourceLocation(AE2RSBridge.MODID, "bridge");
-
-    private BridgeNodeOwner owner;
-
-    public BridgeNetworkNode(BridgeNodeOwner owner, Level level, BlockPos pos) {
-        super(level, pos);
-        this.owner = owner;
+    public BridgeNetworkNode(long energyUsage) {
+        // RS2 外部存储节点需要一个时钟供应器（用于插入追踪），这里沿用 RS2 原版做法用系统时间。
+        super(energyUsage, System::currentTimeMillis);
     }
 
-    public void setOwner(BridgeNodeOwner owner) {
-        this.owner = owner;
-    }
-
+    /**
+     * 网络每次 tick 调用：先执行基类能量抽取（0 消耗），再把 AE2 库存变化推送给 RS 网络。
+     * detectChanges 内部做增量 diff，仅在确有变化时才通知网络存储组件，开销很小。
+     */
     @Override
-    public int getEnergyUsage() {
-        return 0;
-    }
-
-    @Override
-    public boolean isActive() {
-        return true;
-    }
-
-    @Nonnull
-    @Override
-    public ItemStack getItemStack() {
-        if (owner != null) {
-            return owner.getDisplayStack();
-        }
-        return ItemStack.EMPTY;
-    }
-
-    @Override
-    public ResourceLocation getId() {
-        return ID;
-    }
-
-    private BridgeNodeOwner resolveOwner() {
-        if (this.owner != null) {
-            return this.owner;
-        }
-        if (level != null && level.getBlockEntity(pos) instanceof StorageBridgeBlockEntity be) {
-            this.owner = be;
-            return be;
-        }
-        return null;
-    }
-
-    @Override
-    public void addItemStorages(List<IStorage<ItemStack>> storages) {
-        BridgeNodeOwner actualOwner = resolveOwner();
-        if (actualOwner != null) {
-            AENetworkToRSItemStorage itemStorage = actualOwner.getAeToRsItemStorage();
-            if (itemStorage != null) {
-                storages.add(itemStorage);
-            }
-        }
-    }
-
-    @Override
-    public void addFluidStorages(List<IStorage<FluidStack>> storages) {
-        BridgeNodeOwner actualOwner = resolveOwner();
-        if (actualOwner != null) {
-            AENetworkToRSFluidStorage fluidStorage = actualOwner.getAeToRsFluidStorage();
-            if (fluidStorage != null) {
-                storages.add(fluidStorage);
-            }
-        }
-    }
-
-    @Override
-    protected void onConnectedStateChange(INetwork network, boolean state, ConnectivityStateChangeCause cause) {
-        network.getNodeGraph().runActionWhenPossible(
-                ItemStorageCache.INVALIDATE_ACTION.apply(
-                        com.refinedmods.refinedstorage.api.storage.cache.InvalidateCause.CONNECTED_STATE_CHANGED));
-        network.getNodeGraph().runActionWhenPossible(
-                FluidStorageCache.INVALIDATE_ACTION.apply(
-                        com.refinedmods.refinedstorage.api.storage.cache.InvalidateCause.CONNECTED_STATE_CHANGED));
-
-        LevelUtils.updateBlock(level, pos);
-    }
-
-    @Override
-    public CompoundTag writeConfiguration(CompoundTag tag) {
-        // NBT_ID is handled by super.writeConfiguration
-        return super.writeConfiguration(tag);
-    }
-
-    @Override
-    public void readConfiguration(CompoundTag tag) {
-        super.readConfiguration(tag);
-        if (level != null && level.getBlockEntity(pos) instanceof StorageBridgeBlockEntity be) {
-            this.owner = be;
-        }
+    public void doWork() {
+        super.doWork();
+        this.detectChanges();
     }
 }

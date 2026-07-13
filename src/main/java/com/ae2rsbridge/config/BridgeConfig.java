@@ -1,6 +1,6 @@
 package com.ae2rsbridge.config;
 
-import net.minecraftforge.common.ForgeConfigSpec;
+import net.neoforged.neoforge.common.ModConfigSpec;
 
 /**
  * 桥接模组的配置类，使用 Forge ConfigSpec 定义各项可配置参数。
@@ -8,15 +8,15 @@ import net.minecraftforge.common.ForgeConfigSpec;
  */
 public class BridgeConfig {
 
-    private static final ForgeConfigSpec.Builder BUILDER = new ForgeConfigSpec.Builder();
+    private static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
 
-    public static final ForgeConfigSpec.DoubleValue ENERGY_CONVERSION_RATIO;
-    public static final ForgeConfigSpec.DoubleValue ENERGY_BUFFER_CAPACITY;
-    public static final ForgeConfigSpec.DoubleValue MAX_TRANSFER_PER_TICK;
-    public static final ForgeConfigSpec.IntValue BRIDGE_PRIORITY;
-    public static final ForgeConfigSpec.IntValue SYNC_INTERVAL;
+    public static final ModConfigSpec.DoubleValue ENERGY_CONVERSION_RATIO;
+    public static final ModConfigSpec.DoubleValue ENERGY_BUFFER_CAPACITY;
+    public static final ModConfigSpec.DoubleValue MAX_TRANSFER_PER_TICK;
+    public static final ModConfigSpec.IntValue BRIDGE_PRIORITY;
+    public static final ModConfigSpec.IntValue SYNC_INTERVAL;
 
-    public static final ForgeConfigSpec SPEC;
+    public static final ModConfigSpec SPEC;
 
     static {
         BUILDER.comment("AE2-RS Bridge 配置").push("bridge");

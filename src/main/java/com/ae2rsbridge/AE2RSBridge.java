@@ -3,12 +3,11 @@ package com.ae2rsbridge;
 import com.ae2rsbridge.block.StorageBridgeBlock;
 import com.ae2rsbridge.blockentity.StorageBridgeBlockEntity;
 import com.ae2rsbridge.config.BridgeConfig;
-import com.ae2rsbridge.integration.rs.BridgeNetworkNode;
 import com.ae2rsbridge.init.client.InitScreens;
 import com.ae2rsbridge.menu.StorageBridgeMenu;
-import com.refinedmods.refinedstorage.apiimpl.API;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.flag.FeatureFlags;
 import net.minecraft.world.inventory.MenuType;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.CreativeModeTab;
@@ -18,17 +17,16 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.SoundType;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockBehaviour;
-import net.minecraftforge.common.extensions.IForgeMenuType;
-import net.minecraftforge.eventbus.api.IEventBus;
-import net.minecraftforge.fml.ModLoadingContext;
-import net.minecraftforge.fml.common.Mod;
-import net.minecraftforge.fml.config.ModConfig;
-import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
-import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
-import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
-import net.minecraftforge.registries.DeferredRegister;
-import net.minecraftforge.registries.ForgeRegistries;
-import net.minecraftforge.registries.RegistryObject;
+import net.neoforged.bus.api.IEventBus;
+import net.neoforged.fml.ModLoadingContext;
+import net.neoforged.fml.common.Mod;
+import net.neoforged.fml.config.ModConfig;
+import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
+import net.neoforged.fml.javafmlmod.FMLJavaModLoadingContext;
+import net.neoforged.neoforge.capabilities.Capabilities;
+import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
+import net.neoforged.neoforge.registries.DeferredRegister;
+import net.neoforged.neoforge.registries.RegistryObject;
 
 @Mod(AE2RSBridge.MODID)
 public class AE2RSBridge {
@@ -36,16 +34,16 @@ public class AE2RSBridge {
     public static final String MODID = "ae2rsbridge";
 
     public static final DeferredRegister<Block> BLOCKS =
-            DeferredRegister.create(ForgeRegistries.BLOCKS, MODID);
+            DeferredRegister.create(Registries.BLOCK, MODID);
 
     public static final DeferredRegister<Item> ITEMS =
-            DeferredRegister.create(ForgeRegistries.ITEMS, MODID);
+            DeferredRegister.create(Registries.ITEM, MODID);
 
     public static final DeferredRegister<BlockEntityType<?>> BLOCK_ENTITIES =
-            DeferredRegister.create(ForgeRegistries.BLOCK_ENTITY_TYPES, MODID);
+            DeferredRegister.create(Registries.BLOCK_ENTITY_TYPE, MODID);
 
     public static final DeferredRegister<MenuType<?>> MENU_TYPES =
-            DeferredRegister.create(ForgeRegistries.MENU_TYPES, MODID);
+            DeferredRegister.create(Registries.MENU, MODID);
 
     public static final DeferredRegister<CreativeModeTab> CREATIVE_MODE_TABS =
             DeferredRegister.create(Registries.CREATIVE_MODE_TAB, MODID);
@@ -72,7 +70,7 @@ public class AE2RSBridge {
 
     public static final RegistryObject<MenuType<StorageBridgeMenu>> STORAGE_BRIDGE_MENU =
             MENU_TYPES.register("storage_bridge", () ->
-                    IForgeMenuType.create(StorageBridgeMenu::fromNetwork));
+                    new MenuType<>(StorageBridgeMenu::fromNetwork, FeatureFlags.VANILLA));
 
     public static final RegistryObject<CreativeModeTab> CREATIVE_TAB =
             CREATIVE_MODE_TABS.register("ae2rsbridge", () -> CreativeModeTab.builder()
@@ -92,25 +90,17 @@ public class AE2RSBridge {
 
         ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, BridgeConfig.SPEC);
 
-        modEventBus.addListener(this::commonSetup);
+        modEventBus.addListener(this::registerCapabilities);
         modEventBus.addListener(this::clientSetup);
     }
 
-    private void commonSetup(FMLCommonSetupEvent event) {
-        event.enqueueWork(() -> {
-            API.instance().getNetworkNodeRegistry().add(BridgeNetworkNode.ID, (tag, level, pos) -> {
-                BridgeNetworkNode node;
-                if (level.getBlockEntity(pos) instanceof StorageBridgeBlockEntity be) {
-                    node = new BridgeNetworkNode(be, level, pos);
-                } else {
-                    node = new BridgeNetworkNode(null, level, pos);
-                }
-                if (tag != null && !tag.isEmpty()) {
-                    node.readConfiguration(tag);
-                }
-                return node;
-            });
-        });
+    /**
+     * 注册方块实体的 NeoForge 能力。这里把方块实体的能量存储以 FE 能力
+     * （{@code Capabilities.EnergyStorage.BLOCK}）对外暴露，供相邻机器接收能量。
+     */
+    private void registerCapabilities(RegisterCapabilitiesEvent event) {
+        event.registerBlockEntity(Capabilities.EnergyStorage.BLOCK, STORAGE_BRIDGE_ENTITY.get(),
+                (be, side) -> ((StorageBridgeBlockEntity) be).getEnergyStorage());
     }
 
     private void clientSetup(FMLClientSetupEvent event) {

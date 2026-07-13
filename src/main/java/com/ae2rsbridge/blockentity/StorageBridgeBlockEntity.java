@@ -22,15 +22,10 @@ import com.ae2rsbridge.AE2RSBridge;
 import com.ae2rsbridge.bridge.BridgeConfigManager;
 import com.ae2rsbridge.bridge.BridgeEnergyStorage;
 import com.ae2rsbridge.integration.ae2.RSNetworkToAEStorage;
-import com.ae2rsbridge.integration.rs.AENetworkToRSFluidStorage;
-import com.ae2rsbridge.integration.rs.AENetworkToRSItemStorage;
+import com.ae2rsbridge.integration.rs.AE2NetworkToRSStorage;
 import com.ae2rsbridge.integration.rs.BridgeNetworkNode;
-import com.ae2rsbridge.integration.rs.BridgeNodeOwner;
-import com.refinedmods.refinedstorage.api.network.INetwork;
-import com.refinedmods.refinedstorage.api.network.node.INetworkNode;
-import com.refinedmods.refinedstorage.api.network.node.INetworkNodeProxy;
-import com.refinedmods.refinedstorage.apiimpl.API;
-import com.refinedmods.refinedstorage.capability.NetworkNodeProxyCapability;
+import com.refinedmods.refinedstorage.api.network.Network;
+import com.refinedmods.refinedstorage.common.api.support.network.AbstractNetworkNodeContainerBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.nbt.CompoundTag;
@@ -39,39 +34,38 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraftforge.common.capabilities.Capability;
-import net.minecraftforge.common.capabilities.ForgeCapabilities;
-import net.minecraftforge.common.util.LazyOptional;
-import net.minecraftforge.energy.IEnergyStorage;
+import net.neoforged.neoforge.capabilities.Capabilities;
+import net.neoforged.neoforge.energy.IEnergyStorage;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.EnumSet;
 
-public class StorageBridgeBlockEntity extends BlockEntity
+/**
+ * 存储桥接方块实体。
+ * <p>
+ * 同时承载两侧：
+ * <ul>
+ *     <li><b>RS2 侧</b>：继承 {@link AbstractNetworkNodeContainerBlockEntity}，其内置的
+ *         {@link BridgeNetworkNode}（RS2 {@code ExternalStorageNetworkNode}）把 AE2 库存作为
+ *         外部存储接入 RS 网络。节点生命周期、增量 diff、终端刷新全部由 RS2 自动处理，
+ *         无需旧版 RS1 的 {@code NetworkNodeManager}/{@code unloaded} 等 hack。</li>
+ *     <li><b>AE2 侧</b>：实现 {@link IGridConnectedBlockEntity}，把 {@link RSNetworkToAEStorage}
+ *         挂载到 AE2 网格，使 RS 库存对 AE2 终端可见。</li>
+ * </ul>
+ */
+public class StorageBridgeBlockEntity extends AbstractNetworkNodeContainerBlockEntity<BridgeNetworkNode>
         implements IGridConnectedBlockEntity, IStorageProvider, IAEPowerStorage,
-        INetworkNodeProxy<BridgeNetworkNode>, BridgeNodeOwner, IConfigurableObject,
-        IPriorityHost, ISubMenuHost {
+        IConfigurableObject, IPriorityHost, ISubMenuHost {
 
     private static final double AE_DRAW_RATE = 1000.0;
 
     private final IManagedGridNode mainNode;
     private final RSNetworkToAEStorage rsToAeStorage;
-    private final AENetworkToRSItemStorage aeToRsItemStorage;
-    private final AENetworkToRSFluidStorage aeToRsFluidStorage;
+    private final AE2NetworkToRSStorage aeToRsStorage;
     private final BridgeEnergyStorage energyBridge;
-    private LazyOptional<IEnergyStorage> energyCapability;
-
-    @Nullable
-    private BridgeNetworkNode rsNode;
-    private LazyOptional<INetworkNodeProxy<BridgeNetworkNode>> nodeProxyCapability;
-    private boolean rsNodeRegistered = false;
-    private boolean initialized = false;
-    // 区分"方块被破坏"与"区块卸载"：MC 在区块卸载时会先调用 onChunkUnloaded 再调用 setRemoved，
-    // 因此可用该标志在 setRemoved 中判断是否为真正的方块破坏（参照 RS BaseBlockEntity）。
-    private boolean unloaded = false;
 
     private boolean wasRSConnected = false;
     private boolean wasAE2Connected = false;
@@ -79,15 +73,11 @@ public class StorageBridgeBlockEntity extends BlockEntity
     private final BridgeConfigManager configManager;
 
     public StorageBridgeBlockEntity(BlockPos pos, BlockState state) {
-        super(AE2RSBridge.STORAGE_BRIDGE_ENTITY.get(), pos, state);
+        super(AE2RSBridge.STORAGE_BRIDGE_ENTITY.get(), pos, state, new BridgeNetworkNode(0));
         this.energyBridge = new BridgeEnergyStorage();
         this.rsToAeStorage = new RSNetworkToAEStorage(this);
-        this.aeToRsItemStorage = new AENetworkToRSItemStorage(this);
-        this.aeToRsFluidStorage = new AENetworkToRSFluidStorage(this);
-        this.energyCapability = LazyOptional.of(() -> energyBridge);
-        this.nodeProxyCapability = LazyOptional.of(() -> this);
-
-        this.configManager = new BridgeConfigManager(this::setChanged);
+        this.aeToRsStorage = new AE2NetworkToRSStorage(this);
+        this.configManager = new BridgeConfigManager(this::onConfigChanged);
 
         this.mainNode = GridHelper.createManagedNode(this, BlockEntityNodeListener.INSTANCE)
                 .setVisualRepresentation(state.getBlock())
@@ -98,6 +88,50 @@ public class StorageBridgeBlockEntity extends BlockEntity
                 .addService(IStorageProvider.class, this)
                 .addService(IAEPowerStorage.class, this);
     }
+
+    /**
+     * RS2 容器初始化完成回调：把由 AE2 支撑的外部存储提供者注入节点，并设置 RS 侧优先级。
+     */
+    @Override
+    protected void containerInitialized() {
+        mainNetworkNode.initialize(aeToRsStorage);
+        mainNetworkNode.getStorageConfiguration().setInsertPriority(getRSPriority());
+    }
+
+    /** 配置变化时：同步 RS 节点优先级，并请求 AE2 重新挂载本存储（使 AE2 优先级立即生效）。 */
+    private void onConfigChanged() {
+        setChanged();
+        if (mainNetworkNode != null) {
+            mainNetworkNode.getStorageConfiguration().setInsertPriority(getRSPriority());
+        }
+        if (mainNode != null && mainNode.isReady()) {
+            IStorageProvider.requestUpdate(mainNode);
+        }
+    }
+
+    // ===== RS2 侧访问 =====
+
+    @Nullable
+    public Network getRSNetwork() {
+        return mainNetworkNode.getNetwork();
+    }
+
+    public AE2NetworkToRSStorage getAE2NetworkToRSStorage() {
+        return aeToRsStorage;
+    }
+
+    // ===== AE2 侧访问（供 RS 存储提供者读取） =====
+
+    @Nullable
+    public appeng.api.storage.MEStorage getAE2Storage() {
+        IGrid grid = mainNode.getGrid();
+        if (grid == null) {
+            return null;
+        }
+        return grid.getStorageService().getInventory();
+    }
+
+    // ===== IGridConnectedBlockEntity =====
 
     @Override
     public IManagedGridNode getMainNode() {
@@ -125,6 +159,8 @@ public class StorageBridgeBlockEntity extends BlockEntity
         // 永远竞争不过 ME 驱动器/存储总线等。
         storageMounts.mount(rsToAeStorage, getAE2Priority());
     }
+
+    // ===== IAEPowerStorage =====
 
     @Override
     public double injectAEPower(double amt, Actionable mode) {
@@ -156,40 +192,47 @@ public class StorageBridgeBlockEntity extends BlockEntity
         return AccessRestriction.WRITE;
     }
 
-    @Nonnull
-    @Override
-    public BridgeNetworkNode getNode() {
-        if (rsNode == null && level != null) {
-            rsNode = new BridgeNetworkNode(this, level, worldPosition);
-        }
-        if (rsNode == null) {
-            throw new IllegalStateException("BridgeNetworkNode not initialized");
-        }
-        return rsNode;
-    }
-
-    @Override
-    public AENetworkToRSItemStorage getAeToRsItemStorage() {
-        return aeToRsItemStorage;
-    }
-
-    @Override
-    public AENetworkToRSFluidStorage getAeToRsFluidStorage() {
-        return aeToRsFluidStorage;
-    }
+    // ===== 显示 / 状态 =====
 
     @Override
     public ItemStack getDisplayStack() {
         return new ItemStack(AE2RSBridge.STORAGE_BRIDGE_ITEM.get());
     }
 
-    @Nullable
-    public INetwork getRSNetwork() {
-        if (rsNode != null) {
-            return rsNode.getNetwork();
-        }
-        return null;
+    public Component getAE2Status() {
+        return isAE2Connected() ? Component.literal("已连接") : Component.literal("未连接");
     }
+
+    public Component getRSStatus() {
+        return isRSConnected() ? Component.literal("已连接") : Component.literal("未连接");
+    }
+
+    public boolean isAE2Connected() {
+        return mainNode.isReady();
+    }
+
+    public boolean isRSConnected() {
+        Network network = mainNetworkNode.getNetwork();
+        return network != null && mainNetworkNode.isActive();
+    }
+
+    public double getAEEnergy() {
+        return energyBridge.getAECurrentPower();
+    }
+
+    public int getFEEnergy() {
+        return energyBridge.getFECurrentPower();
+    }
+
+    public boolean isActiveOutput() {
+        return energyBridge.isActiveOutput();
+    }
+
+    public void setActiveOutput(boolean active) {
+        energyBridge.setActiveOutput(active);
+    }
+
+    // ===== 配置访问器（供菜单与界面使用） =====
 
     public int getAE2Priority() {
         return configManager.getAE2Priority();
@@ -223,62 +266,23 @@ public class StorageBridgeBlockEntity extends BlockEntity
         configManager.setNonStackableOnly(value);
     }
 
-    public Component getAE2Status() {
-        if (mainNode.isReady()) {
-            return Component.literal("已连接");
-        }
-        return Component.literal("未连接");
+    // ===== 能量能力（供 NeoForge 注册） =====
+
+    public IEnergyStorage getEnergyStorage() {
+        return energyBridge;
     }
 
-    public Component getRSStatus() {
-        INetwork rsNetwork = getRSNetwork();
-        if (rsNetwork != null && rsNetwork.canRun()) {
-            return Component.literal("已连接");
-        }
-        return Component.literal("未连接");
-    }
-
-    public boolean isAE2Connected() {
-        return mainNode.isReady();
-    }
-
-    public boolean isRSConnected() {
-        INetwork rsNetwork = getRSNetwork();
-        return rsNetwork != null && rsNetwork.canRun();
-    }
-
-    public double getAEEnergy() {
-        return energyBridge.getAECurrentPower();
-    }
-
-    public int getFEEnergy() {
-        return energyBridge.getFECurrentPower();
-    }
-
-    public boolean isActiveOutput() {
-        return energyBridge.isActiveOutput();
-    }
-
-    public void setActiveOutput(boolean active) {
-        energyBridge.setActiveOutput(active);
-    }
+    // ===== 服务端 tick =====
 
     public void serverTick() {
-        if (level == null || level.isClientSide()) return;
-
-        energyBridge.resetTickExtract();
-
-        drawEnergyFromAE2();
-
-        if (energyBridge.isActiveOutput()) {
-            pushEnergyToNeighbors();
+        if (level == null || level.isClientSide()) {
+            return;
         }
 
-        INetwork rsNetwork = getRSNetwork();
-        boolean rsRunning = rsNetwork != null && rsNetwork.canRun();
-        if (rsRunning) {
-            aeToRsItemStorage.update(rsNetwork);
-            aeToRsFluidStorage.update(rsNetwork);
+        energyBridge.resetTickExtract();
+        drawEnergyFromAE2();
+        if (energyBridge.isActiveOutput()) {
+            pushEnergyToNeighbors();
         }
 
         boolean currentAE2Connected = isAE2Connected();
@@ -292,49 +296,15 @@ public class StorageBridgeBlockEntity extends BlockEntity
             wasRSConnected = currentRSConnected;
             onRSConnectionChanged(currentRSConnected);
         }
-
-        if ((!rsRunning || !rsNodeRegistered) && level instanceof ServerLevel serverLevel && (level.getGameTime() % 20 == 0 || !rsNodeRegistered)) {
-            var manager = API.instance().getNetworkNodeManager(serverLevel);
-            if (manager != null) {
-                INetworkNode existingNode = manager.getNode(worldPosition);
-                if (existingNode instanceof BridgeNetworkNode existingBridgeNode) {
-                    existingBridgeNode.setOwner(this);
-                    this.rsNode = existingBridgeNode;
-                    invalidateRSGraph(existingBridgeNode);
-                    rsNodeRegistered = true;
-                } else if (this.rsNode != null) {
-                    manager.setNode(worldPosition, this.rsNode);
-                    rsNodeRegistered = true;
-                }
-            }
-        }
     }
 
-    /**
-     * 触发 RS 网络节点图重扫。
-     * <p>
-     * 关键：origin 必须使用 <b>控制器位置</b>（{@code network.getPosition()}），
-     * 而不是桥接方块自身位置。RS 的 {@code NetworkNodeGraph.invalidate} 从 origin
-     * 方块实体获取起点节点做 BFS；若以自身位置为 origin，而此刻自身节点已失效
-     * （例如方块正在被破坏），起点为 null 会导致遍历立即结束，整个网络节点图被
-     * 清空（entries 变空），控制器随之断开、网络停止。使用控制器位置可保证始终
-     * 从一个存活节点出发重建整图。这与 RS 原版
-     * {@code NetworkNodeBlockEntity.onRemovedNotDueToChunkUnload} 的做法一致。
-     */
-    private void invalidateRSGraph(@Nullable BridgeNetworkNode node) {
-        if (node == null) {
-            return;
-        }
-        INetwork network = node.getNetwork();
-        if (network == null) {
-            return;
-        }
-        network.getNodeGraph().invalidate(
-                com.refinedmods.refinedstorage.api.util.Action.PERFORM,
-                network.getLevel(), network.getPosition());
+    private void onAE2ConnectionChanged(boolean connected) {
+        // RS2 节点会在下一次 doWork 时通过 detectChanges 自动拾取 AE2 库存变化，
+        // 无需像 RS1 那样手动重扫 RS 节点图。
     }
 
     private void onRSConnectionChanged(boolean connected) {
+        // RS 连接状态变化：让 AE2 重新读取本存储（刷新 RS 物品在 AE2 终端的可见性）。
         if (mainNode.isReady()) {
             IGrid aeGrid = mainNode.getGrid();
             if (aeGrid != null) {
@@ -346,34 +316,19 @@ public class StorageBridgeBlockEntity extends BlockEntity
         }
     }
 
-    private void onAE2ConnectionChanged(boolean connected) {
-        if (level instanceof ServerLevel serverLevel) {
-            var manager = API.instance().getNetworkNodeManager(serverLevel);
-            if (manager != null) {
-                INetworkNode node = manager.getNode(worldPosition);
-                if (node instanceof BridgeNetworkNode bridgeNode) {
-                    invalidateRSGraph(bridgeNode);
-                }
-            }
-        }
-    }
-
     private void drawEnergyFromAE2() {
         IGrid grid = mainNode.getGrid();
         if (grid == null) {
             return;
         }
-
         IEnergyService energyService = grid.getEnergyService();
         if (energyService == null) {
             return;
         }
-
         double space = energyBridge.getAEMaxPower() - energyBridge.getAECurrentPower();
         if (space <= 0) {
             return;
         }
-
         double toDraw = Math.min(AE_DRAW_RATE, space);
         double extracted = energyService.extractAEPower(toDraw, Actionable.MODULATE, PowerMultiplier.ONE);
         if (extracted > 0) {
@@ -385,12 +340,10 @@ public class StorageBridgeBlockEntity extends BlockEntity
         if (level == null || level.isClientSide()) {
             return;
         }
-
         int energyToPush = energyBridge.getFECurrentPower();
         if (energyToPush <= 0) {
             return;
         }
-
         energyToPush = Math.min(energyToPush, 2000);
         int totalPushed = 0;
 
@@ -399,13 +352,11 @@ public class StorageBridgeBlockEntity extends BlockEntity
                 break;
             }
             BlockPos adjacentPos = worldPosition.relative(dir);
-            BlockEntity be = level.getBlockEntity(adjacentPos);
-            if (be != null) {
-                var energyStorage = be.getCapability(ForgeCapabilities.ENERGY, dir.getOpposite()).orElse(null);
-                if (energyStorage != null && energyStorage.canReceive()) {
-                    int pushed = energyStorage.receiveEnergy(energyToPush - totalPushed, false);
-                    totalPushed += pushed;
-                }
+            IEnergyStorage energyStorage = level.getCapability(
+                    Capabilities.EnergyStorage.BLOCK, adjacentPos, dir.getOpposite());
+            if (energyStorage != null && energyStorage.canReceive()) {
+                int pushed = energyStorage.receiveEnergy(energyToPush - totalPushed, false);
+                totalPushed += pushed;
             }
         }
 
@@ -414,18 +365,12 @@ public class StorageBridgeBlockEntity extends BlockEntity
         }
     }
 
-    @Override
-    public void onLoad() {
-        super.onLoad();
-        if (level != null && !level.isClientSide()) {
-            initialized = false; // will be set by onFirstTick
-            rsNodeRegistered = false;
-        }
-    }
+    // ===== 生命周期 =====
 
     @Override
     public void clearRemoved() {
         super.clearRemoved();
+        // 基类已初始化 RS2 容器（注册 RS 节点）；这里再安排 AE2 网格节点创建。
         GridHelper.onFirstTick(this, StorageBridgeBlockEntity::onFirstTick);
     }
 
@@ -433,33 +378,17 @@ public class StorageBridgeBlockEntity extends BlockEntity
         if (be.level == null || be.level.isClientSide()) {
             return;
         }
-
         if (!be.mainNode.isReady()) {
             be.mainNode.create(be.level, be.worldPosition);
         }
-
-        if (be.level instanceof ServerLevel serverLevel) {
-            var manager = API.instance().getNetworkNodeManager(serverLevel);
-            if (manager != null) {
-                INetworkNode existingNode = manager.getNode(be.worldPosition);
-                if (existingNode instanceof BridgeNetworkNode existingBridgeNode) {
-                    existingBridgeNode.setOwner(be);
-                    be.rsNode = existingBridgeNode;
-                    // Re-register and force RS graph rebuild（以控制器位置为 origin）
-                    manager.setNode(be.worldPosition, be.rsNode);
-                    be.invalidateRSGraph(existingBridgeNode);
-                } else {
-                    be.rsNode = new BridgeNetworkNode(be, be.level, be.worldPosition);
-                    manager.setNode(be.worldPosition, be.rsNode);
-                }
-            } else {
-                be.rsNode = new BridgeNetworkNode(be, be.level, be.worldPosition);
-            }
-            be.rsNodeRegistered = true;
-        }
-
         be.wasRSConnected = be.isRSConnected();
-        be.initialized = true;
+    }
+
+    @Override
+    public void setRemoved() {
+        super.setRemoved();
+        // 基类已移除 RS2 容器；这里销毁 AE2 网格节点。
+        mainNode.destroy();
     }
 
     @Override
@@ -485,6 +414,7 @@ public class StorageBridgeBlockEntity extends BlockEntity
     }
 
     // ===== IPriorityHost - 当前正在编辑的优先级目标 =====
+
     private PriorityTarget priorityTarget = PriorityTarget.AE2;
 
     public enum PriorityTarget { AE2, RS }
@@ -519,9 +449,9 @@ public class StorageBridgeBlockEntity extends BlockEntity
     }
 
     // ===== ISubMenuHost - 子菜单返回主菜单 =====
+
     @Override
     public void returnToMainMenu(Player player, ISubMenu subMenu) {
-        // 重新打开主菜单
         if (player instanceof ServerPlayer serverPlayer) {
             com.ae2rsbridge.block.StorageBridgeBlock.openMainMenu(serverPlayer, this);
         }
@@ -530,75 +460,5 @@ public class StorageBridgeBlockEntity extends BlockEntity
     @Override
     public ItemStack getMainMenuIcon() {
         return new ItemStack(AE2RSBridge.STORAGE_BRIDGE_ITEM.get());
-    }
-
-    @Override
-    public void setRemoved() {
-        super.setRemoved();
-        // 仅销毁 AE2 侧网格节点。setRemoved 在方块破坏与区块卸载两种情况下都会触发，
-        // 因此这里绝不能无条件移除 RS 节点——区块卸载时移除 RS 节点会误删网络节点、破坏网络。
-        // MC 在区块卸载时先调用 onChunkUnloaded(置 unloaded=true) 再调用本方法，
-        // 故仅当 !unloaded（真正的方块破坏）时才移除 RS 节点并重扫网络。
-        mainNode.destroy();
-        if (!unloaded) {
-            onRemovedNotDueToChunkUnload();
-        }
-    }
-
-    @Override
-    public void onChunkUnloaded() {
-        super.onChunkUnloaded();
-        // 区块卸载：只销毁 AE2 节点，保留 RS 节点（重新加载时恢复），不重扫 RS 网络。
-        unloaded = true;
-        mainNode.destroy();
-    }
-
-    /**
-     * 仅在方块被真正破坏（而非区块卸载）时调用。此处才移除 RS 网络节点并触发重扫。
-     * 参照 RS 原版 {@code NetworkNodeBlockEntity.onRemovedNotDueToChunkUnload}：
-     * 先从 manager 移除节点，再以<b>控制器位置</b>为 origin 让网络从存活节点重建图。
-     * 注意：本类直接继承 MC 的 BlockEntity，父类没有此方法，故不能加 @Override，
-     * 也不能调用 super；由 setRemoved 在 !unloaded 时主动调用。
-     */
-    private void onRemovedNotDueToChunkUnload() {
-        if (level instanceof ServerLevel serverLevel) {
-            var manager = API.instance().getNetworkNodeManager(serverLevel);
-            if (manager != null) {
-                INetworkNode node = manager.getNode(worldPosition);
-                manager.removeNode(worldPosition);
-                if (node != null && node.getNetwork() != null) {
-                    INetwork network = node.getNetwork();
-                    network.getNodeGraph().invalidate(
-                            com.refinedmods.refinedstorage.api.util.Action.PERFORM,
-                            network.getLevel(), network.getPosition());
-                }
-            }
-        }
-        this.rsNode = null;
-    }
-
-    @Override
-    public <T> LazyOptional<T> getCapability(Capability<T> cap, @Nullable Direction side) {
-        if (cap == ForgeCapabilities.ENERGY) {
-            return energyCapability.cast();
-        }
-        if (cap == NetworkNodeProxyCapability.NETWORK_NODE_PROXY_CAPABILITY) {
-            return nodeProxyCapability.cast();
-        }
-        return super.getCapability(cap, side);
-    }
-
-    @Override
-    public void invalidateCaps() {
-        super.invalidateCaps();
-        energyCapability.invalidate();
-        nodeProxyCapability.invalidate();
-    }
-
-    @Override
-    public void reviveCaps() {
-        super.reviveCaps();
-        energyCapability = LazyOptional.of(() -> energyBridge);
-        nodeProxyCapability = LazyOptional.of(() -> this);
     }
 }

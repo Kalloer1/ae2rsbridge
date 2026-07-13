@@ -9,14 +9,31 @@ import appeng.api.stacks.KeyCounter;
 import appeng.api.storage.MEStorage;
 import com.ae2rsbridge.blockentity.StorageBridgeBlockEntity;
 import com.ae2rsbridge.bridge.BridgeTransactionGuard;
-import com.refinedmods.refinedstorage.api.network.INetwork;
-import com.refinedmods.refinedstorage.api.util.Action;
-import com.refinedmods.refinedstorage.api.util.IStackList;
-import com.refinedmods.refinedstorage.api.util.StackListEntry;
+import com.ae2rsbridge.bridge.KeyConverter;
+import com.refinedmods.refinedstorage.api.core.Action;
+import com.refinedmods.refinedstorage.api.network.Network;
+import com.refinedmods.refinedstorage.api.network.storage.StorageNetworkComponent;
+import com.refinedmods.refinedstorage.api.resource.ResourceAmount;
+import com.refinedmods.refinedstorage.api.resource.ResourceKey;
+import com.refinedmods.refinedstorage.api.storage.Actor;
+import com.refinedmods.refinedstorage.api.storage.root.RootStorage;
+import com.refinedmods.refinedstorage.common.support.resource.FluidResource;
+import com.refinedmods.refinedstorage.common.support.resource.ItemResource;
 import net.minecraft.network.chat.Component;
-import net.minecraft.world.item.ItemStack;
-import net.minecraftforge.fluids.FluidStack;
 
+/**
+ * RS2 网络 → AE2 网络的存储（挂载到 AE2 网格的 MEStorage）。
+ * <p>
+ * 旧版 RS1 使用 {@code INetwork.insertItem/extractItem/getItemStorageCache().getList()} 等 API，
+ * 在 RS2 中已不存在。新版改为通过 {@code network.getComponent(StorageNetworkComponent.class)}
+ * 拿到 RS 网络的根存储（{@link RootStorage}），对其做 insert/extract/getAll。
+ * <p>
+ * 去重（防翻倍）：RS 网络里已经包含了 AE2 经 {@link AE2NetworkToRSStorage} 镜像过去的物品，
+ * 因此 {@link #getAvailableStacks} 读出 RS 库存后，必须扣除“AE2 已上报给 RS 的快照”
+ * （{@code bridge.getAE2NetworkToRSStorage().getReportedToRS()}），只把真正属于 RS 的物品
+ * 暴露给 AE2 终端。这与旧版用两个 IExternalStorage 的 reportedToRS 做扣减思路一致，
+ * 只是现在合并到单一的 provider 快照里。
+ */
 public class RSNetworkToAEStorage implements MEStorage {
 
     private final StorageBridgeBlockEntity bridge;
@@ -25,7 +42,7 @@ public class RSNetworkToAEStorage implements MEStorage {
         this.bridge = bridge;
     }
 
-    private INetwork getRSNetwork() {
+    private Network getRSNetwork() {
         return bridge.getRSNetwork();
     }
 
@@ -50,33 +67,28 @@ public class RSNetworkToAEStorage implements MEStorage {
             return 0;
         }
 
-        INetwork network = getRSNetwork();
-        if (network == null || !network.canRun()) {
+        Network network = getRSNetwork();
+        if (network == null) {
+            return 0;
+        }
+        RootStorage root = network.getComponent(StorageNetworkComponent.class);
+        if (root == null) {
             return 0;
         }
 
+        // 守卫激活时拒绝：避免 AE2 把 RS 镜像回来的物品又写回 RS（无限回环）
         if (BridgeTransactionGuard.isActive()) {
             return 0;
         }
         BridgeTransactionGuard.begin();
         try {
+            ResourceKey rsKey = KeyConverter.toRSKey(key);
+            if (rsKey == null) {
+                return 0;
+            }
             int size = (int) Math.min(amount, Integer.MAX_VALUE);
-
-            if (AEItemKey.is(key)) {
-                AEItemKey itemKey = (AEItemKey) key;
-                ItemStack prototype = itemKey.toStack(1);
-                ItemStack remainder = network.insertItem(prototype, size, toRSAction(mode));
-                return (long) size - remainder.getCount();
-            }
-
-            if (AEFluidKey.is(key)) {
-                AEFluidKey fluidKey = (AEFluidKey) key;
-                FluidStack prototype = fluidKey.toStack(1);
-                FluidStack remainder = network.insertFluid(prototype, size, toRSAction(mode));
-                return (long) size - remainder.getAmount();
-            }
-
-            return 0;
+            long inserted = root.insert(rsKey, size, toRSAction(mode), Actor.EMPTY);
+            return inserted;
         } finally {
             BridgeTransactionGuard.end();
         }
@@ -93,33 +105,28 @@ public class RSNetworkToAEStorage implements MEStorage {
             return 0;
         }
 
-        INetwork network = getRSNetwork();
-        if (network == null || !network.canRun()) {
+        Network network = getRSNetwork();
+        if (network == null) {
+            return 0;
+        }
+        RootStorage root = network.getComponent(StorageNetworkComponent.class);
+        if (root == null) {
             return 0;
         }
 
+        // 守卫激活时拒绝：避免 AE2 把 RS 镜像回来的物品又读回（无限回环）
         if (BridgeTransactionGuard.isActive()) {
             return 0;
         }
         BridgeTransactionGuard.begin();
         try {
+            ResourceKey rsKey = KeyConverter.toRSKey(key);
+            if (rsKey == null) {
+                return 0;
+            }
             int size = (int) Math.min(amount, Integer.MAX_VALUE);
-
-            if (AEItemKey.is(key)) {
-                AEItemKey itemKey = (AEItemKey) key;
-                ItemStack prototype = itemKey.toStack(1);
-                ItemStack extracted = network.extractItem(prototype, size, toRSAction(mode));
-                return extracted.getCount();
-            }
-
-            if (AEFluidKey.is(key)) {
-                AEFluidKey fluidKey = (AEFluidKey) key;
-                FluidStack prototype = fluidKey.toStack(1);
-                FluidStack extracted = network.extractFluid(prototype, size, toRSAction(mode));
-                return extracted.getAmount();
-            }
-
-            return 0;
+            long extracted = root.extract(rsKey, size, toRSAction(mode), Actor.EMPTY);
+            return extracted;
         } finally {
             BridgeTransactionGuard.end();
         }
@@ -132,62 +139,49 @@ public class RSNetworkToAEStorage implements MEStorage {
             return;
         }
 
-        INetwork network = getRSNetwork();
-        if (network == null || !network.canRun()) {
+        Network network = getRSNetwork();
+        if (network == null) {
+            return;
+        }
+        RootStorage root = network.getComponent(StorageNetworkComponent.class);
+        if (root == null) {
             return;
         }
 
+        // 守卫激活时直接返回（不读 RS），避免回环
         if (BridgeTransactionGuard.isActive()) {
             return;
         }
         BridgeTransactionGuard.begin();
         try {
-            KeyCounter ae2ReportedToRS = new KeyCounter();
-            for (var entry : bridge.getAeToRsItemStorage().getReportedToRS()) {
-                ae2ReportedToRS.add(entry.getKey(), entry.getLongValue());
-            }
-            for (var entry : bridge.getAeToRsFluidStorage().getReportedToRS()) {
-                ae2ReportedToRS.add(entry.getKey(), entry.getLongValue());
-            }
+            // 计算 AE2 已上报给 RS 的快照（含 RS 镜像回来的 AE 物品），用于扣除，避免翻倍。
+            KeyCounter ae2ReportedToRS = bridge.getAE2NetworkToRSStorage().getReportedToRS();
 
-            var itemCache = network.getItemStorageCache();
-            if (itemCache != null) {
-                IStackList<ItemStack> itemList = itemCache.getList();
-                if (itemList != null) {
-                    for (StackListEntry<ItemStack> entry : itemList.getStacks()) {
-                        ItemStack stack = entry.getStack();
-                        if (stack != null && !stack.isEmpty()) {
-                            AEItemKey key = AEItemKey.of(stack);
-                            if (key != null) {
-                                long rsAmount = stack.getCount();
-                                long ae2Amount = ae2ReportedToRS.get(key);
-                                long netAmount = rsAmount - ae2Amount;
-                                if (netAmount > 0) {
-                                    out.add(key, netAmount);
-                                }
-                            }
-                        }
-                    }
+            for (ResourceAmount ra : root.getAll()) {
+                ResourceKey resource = ra.resource();
+                long rsAmount = ra.amount();
+                if (rsAmount <= 0) {
+                    continue;
                 }
-            }
-
-            var fluidCache = network.getFluidStorageCache();
-            if (fluidCache != null) {
-                IStackList<FluidStack> fluidList = fluidCache.getList();
-                if (fluidList != null) {
-                    for (StackListEntry<FluidStack> entry : fluidList.getStacks()) {
-                        FluidStack stack = entry.getStack();
-                        if (stack != null && !stack.isEmpty()) {
-                            AEFluidKey key = AEFluidKey.of(stack);
-                            if (key != null) {
-                                long rsAmount = stack.getAmount();
-                                long ae2Amount = ae2ReportedToRS.get(key);
-                                long netAmount = rsAmount - ae2Amount;
-                                if (netAmount > 0) {
-                                    out.add(key, netAmount);
-                                }
-                            }
-                        }
+                if (resource instanceof ItemResource itemResource) {
+                    AEItemKey aeKey = KeyConverter.toAEItemKey(itemResource);
+                    if (aeKey == null) {
+                        continue;
+                    }
+                    long ae2Amount = ae2ReportedToRS.get(aeKey);
+                    long netAmount = rsAmount - ae2Amount;
+                    if (netAmount > 0) {
+                        out.add(aeKey, netAmount);
+                    }
+                } else if (resource instanceof FluidResource fluidResource) {
+                    AEFluidKey aeKey = KeyConverter.toAEFluidKey(fluidResource);
+                    if (aeKey == null) {
+                        continue;
+                    }
+                    long ae2Amount = ae2ReportedToRS.get(aeKey);
+                    long netAmount = rsAmount - ae2Amount;
+                    if (netAmount > 0) {
+                        out.add(aeKey, netAmount);
                     }
                 }
             }
