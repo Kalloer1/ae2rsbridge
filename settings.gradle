@@ -1,6 +1,9 @@
 pluginManagement {
     repositories {
         gradlePluginPortal()
+        // 国内镜像（加速中国网络；失败时自动回退到下方官方源）
+        maven { url = 'https://maven.aliyun.com/repository/gradle-plugin' } // Gradle 插件门户镜像
+        maven { url = 'https://bmclapi2.bangbang93.com/maven/' }            // minecraftforge / neoforged 镜像
         maven { url = 'https://maven.minecraftforge.net/' }
     }
 }

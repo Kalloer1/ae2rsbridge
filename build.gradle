@@ -17,6 +17,10 @@ base {
 java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 
 repositories {
+    // === 国内镜像（优先；加速中国网络，缺失自动回退到下方官方源） ===
+    maven { url = 'https://maven.aliyun.com/repository/public' }   // 镜像 Maven Central（AE2 等）
+    maven { url = 'https://bmclapi2.bangbang93.com/maven/' }       // 镜像 maven.neoforged.net / minecraftforge（NeoForge 本体）
+    // === 官方源（回退） ===
     mavenCentral()
     maven {
         name = 'NeoForged'
