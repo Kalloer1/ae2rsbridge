@@ -32,8 +32,9 @@ public class StorageBridgeScreen extends AEBaseScreen<StorageBridgeMenu> {
                                Component title, ScreenStyle style) {
         super(menu, playerInventory, title, style);
 
-        // 隐藏 player_inventory.json 里的“物品栏”标签，避免与状态文字重叠
-        setTextHidden("player_inventory_title", true);
+        // 面板高度已放大，物品栏标题不会与状态文字重叠，保留显示便于玩家识别背包区域
+        // 如需隐藏可取消下一行注释
+        // setTextHidden("player_inventory_title", true);
 
         // ── 访问模式开关（复用 AE2 内置 Settings.ACCESS 三态图标） ──
         // 点击后由 SettingToggleButton 自动发送 ConfigButtonPacket，

@@ -55,9 +55,10 @@ public class RSNetworkToAEStorage implements MEStorage {
             return 0;
         }
 
-        if (!BridgeTransactionGuard.begin()) {
+        if (BridgeTransactionGuard.isActive()) {
             return 0;
         }
+        BridgeTransactionGuard.begin();
         try {
             int size = (int) Math.min(amount, Integer.MAX_VALUE);
 
@@ -97,9 +98,10 @@ public class RSNetworkToAEStorage implements MEStorage {
             return 0;
         }
 
-        if (!BridgeTransactionGuard.begin()) {
+        if (BridgeTransactionGuard.isActive()) {
             return 0;
         }
+        BridgeTransactionGuard.begin();
         try {
             int size = (int) Math.min(amount, Integer.MAX_VALUE);
 
@@ -135,9 +137,10 @@ public class RSNetworkToAEStorage implements MEStorage {
             return;
         }
 
-        if (!BridgeTransactionGuard.begin()) {
+        if (BridgeTransactionGuard.isActive()) {
             return;
         }
+        BridgeTransactionGuard.begin();
         try {
             KeyCounter ae2ReportedToRS = new KeyCounter();
             for (var entry : bridge.getAeToRsItemStorage().getReportedToRS()) {
