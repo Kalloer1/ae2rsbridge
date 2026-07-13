@@ -11,7 +11,6 @@ import com.ae2rsbridge.blockentity.StorageBridgeBlockEntity;
 import com.ae2rsbridge.bridge.BridgeTransactionGuard;
 import com.refinedmods.refinedstorage.api.network.INetwork;
 import com.refinedmods.refinedstorage.api.storage.AccessType;
-import com.refinedmods.refinedstorage.api.storage.cache.InvalidateCause;
 import com.refinedmods.refinedstorage.api.storage.externalstorage.IExternalStorage;
 import com.refinedmods.refinedstorage.api.util.Action;
 import it.unimi.dsi.fastutil.objects.Object2LongMap;
@@ -28,6 +27,8 @@ public class AENetworkToRSFluidStorage implements IExternalStorage<FluidStack> {
     private boolean needsCacheInvalidation = false;
     private long cachedStored = -1;
     private final KeyCounter reportedToRS = new KeyCounter();
+    // 同 AENetworkToRSItemStorage：getStacks 填充缓存后标记需要客户端全量重同步。
+    private boolean clientResyncNeeded = true;
 
     public AENetworkToRSFluidStorage(StorageBridgeBlockEntity bridge) {
         this.bridge = bridge;
@@ -73,7 +74,7 @@ public class AENetworkToRSFluidStorage implements IExternalStorage<FluidStack> {
             return copy;
         }
 
-        boolean began = BridgeTransactionGuard.begin();
+        BridgeTransactionGuard.begin();
         try {
             Actionable mode = toAE2Action(action);
             long inserted = ae2Storage.insert(key, size, mode, actionSource);
@@ -88,9 +89,7 @@ public class AENetworkToRSFluidStorage implements IExternalStorage<FluidStack> {
             remainderStack.setAmount(remainder);
             return remainderStack;
         } finally {
-            if (began) {
-                BridgeTransactionGuard.end();
-            }
+            BridgeTransactionGuard.end();
         }
     }
 
@@ -113,7 +112,7 @@ public class AENetworkToRSFluidStorage implements IExternalStorage<FluidStack> {
             return FluidStack.EMPTY;
         }
 
-        boolean began = BridgeTransactionGuard.begin();
+        BridgeTransactionGuard.begin();
         try {
             Actionable mode = toAE2Action(action);
             long extracted = ae2Storage.extract(key, size, mode, actionSource);
@@ -128,18 +127,15 @@ public class AENetworkToRSFluidStorage implements IExternalStorage<FluidStack> {
             extractedStack.setAmount(amount);
             return extractedStack;
         } finally {
-            if (began) {
-                BridgeTransactionGuard.end();
-            }
+            BridgeTransactionGuard.end();
         }
     }
 
     @Override
     public Collection<FluidStack> getStacks() {
-        if (BridgeTransactionGuard.isActive()) {
-            return new ArrayList<>();
-        }
-        boolean began = BridgeTransactionGuard.begin();
+        // 同 AENetworkToRSItemStorage.getStacks：守卫激活时也必须返回正确数据，
+        // 否则 invalidate() 清空 RS 缓存后 AE 流体无法恢复。
+        BridgeTransactionGuard.begin();
         try {
             List<FluidStack> stacks = new ArrayList<>();
             MEStorage ae2Storage = getAE2Storage();
@@ -149,6 +145,7 @@ public class AENetworkToRSFluidStorage implements IExternalStorage<FluidStack> {
 
             KeyCounter counter = ae2Storage.getAvailableStacks();
             reportedToRS.clear();
+            clientResyncNeeded = true;
             for (Object2LongMap.Entry<AEKey> entry : counter) {
                 AEKey key = entry.getKey();
                 if (AEFluidKey.is(key)) {
@@ -163,9 +160,7 @@ public class AENetworkToRSFluidStorage implements IExternalStorage<FluidStack> {
             }
             return stacks;
         } finally {
-            if (began) {
-                BridgeTransactionGuard.end();
-            }
+            BridgeTransactionGuard.end();
         }
     }
 
@@ -175,10 +170,7 @@ public class AENetworkToRSFluidStorage implements IExternalStorage<FluidStack> {
 
     @Override
     public int getStored() {
-        if (BridgeTransactionGuard.isActive()) {
-            return 0;
-        }
-        boolean began = BridgeTransactionGuard.begin();
+        BridgeTransactionGuard.begin();
         try {
             MEStorage ae2Storage = getAE2Storage();
             if (ae2Storage == null) {
@@ -194,9 +186,7 @@ public class AENetworkToRSFluidStorage implements IExternalStorage<FluidStack> {
             }
             return (int) Math.min(total, Integer.MAX_VALUE);
         } finally {
-            if (began) {
-                BridgeTransactionGuard.end();
-            }
+            BridgeTransactionGuard.end();
         }
     }
 
@@ -223,22 +213,90 @@ public class AENetworkToRSFluidStorage implements IExternalStorage<FluidStack> {
         return -1;
     }
 
+    /** 计算当前应上报给 RS 的 AE2 流体快照（重入守卫下排除 RS 镜像回来的流体）。 */
+    private KeyCounter computeSnapshot() {
+        KeyCounter snapshot = new KeyCounter();
+        MEStorage ae2Storage = getAE2Storage();
+        if (ae2Storage == null) {
+            return snapshot;
+        }
+        KeyCounter counter = ae2Storage.getAvailableStacks();
+        for (Object2LongMap.Entry<AEKey> entry : counter) {
+            AEKey key = entry.getKey();
+            if (AEFluidKey.is(key)) {
+                long amount = entry.getLongValue();
+                if (amount > 0) {
+                    snapshot.add(key, amount);
+                }
+            }
+        }
+        return snapshot;
+    }
+
+    /**
+     * 增量 diff 推送（见 AENetworkToRSItemStorage.update 的说明）：RS 终端监听器的
+     * onInvalidated 是 NO-OP，必须用 cache.add/remove+flush 推送 delta 才能刷新客户端。
+     */
     @Override
     public void update(INetwork network) {
         if (network == null || network.getFluidStorageCache() == null) {
             return;
         }
-
-        if (needsCacheInvalidation) {
-            network.getFluidStorageCache().invalidate(InvalidateCause.DISK_INVENTORY_CHANGED);
-            needsCacheInvalidation = false;
+        if (BridgeTransactionGuard.isActive()) {
             return;
         }
 
-        long currentStored = getStored();
-        if (currentStored != cachedStored) {
-            cachedStored = currentStored;
-            network.getFluidStorageCache().invalidate(InvalidateCause.DISK_INVENTORY_CHANGED);
+        BridgeTransactionGuard.begin();
+        try {
+            var cache = network.getFluidStorageCache();
+            KeyCounter current = computeSnapshot();
+            boolean changed = false;
+
+            for (Object2LongMap.Entry<AEKey> entry : current) {
+                AEKey key = entry.getKey();
+                long delta = entry.getLongValue() - reportedToRS.get(key);
+                if (delta > 0) {
+                    int d = (int) Math.min(delta, Integer.MAX_VALUE);
+                    cache.add(((AEFluidKey) key).toStack(d), d, false, true);
+                    changed = true;
+                } else if (delta < 0) {
+                    int d = (int) Math.min(-delta, Integer.MAX_VALUE);
+                    cache.remove(((AEFluidKey) key).toStack(d), d, true);
+                    changed = true;
+                }
+            }
+            for (Object2LongMap.Entry<AEKey> entry : reportedToRS) {
+                AEKey key = entry.getKey();
+                long oldAmt = entry.getLongValue();
+                if (oldAmt > 0 && current.get(key) == 0 && AEFluidKey.is(key)) {
+                    int d = (int) Math.min(oldAmt, Integer.MAX_VALUE);
+                    cache.remove(((AEFluidKey) key).toStack(d), d, true);
+                    changed = true;
+                }
+            }
+
+            reportedToRS.clear();
+            for (Object2LongMap.Entry<AEKey> entry : current) {
+                reportedToRS.add(entry.getKey(), entry.getLongValue());
+            }
+            cachedStored = 0;
+            for (Object2LongMap.Entry<AEKey> entry : current) {
+                cachedStored += entry.getLongValue();
+            }
+
+            needsCacheInvalidation = false;
+
+            // 同 AENetworkToRSItemStorage：客户端首屏/重连全量重同步。
+            if (clientResyncNeeded) {
+                network.getFluidStorageCache().reAttachListeners();
+                clientResyncNeeded = false;
+            }
+
+            if (changed) {
+                cache.flush();
+            }
+        } finally {
+            BridgeTransactionGuard.end();
         }
     }
 }

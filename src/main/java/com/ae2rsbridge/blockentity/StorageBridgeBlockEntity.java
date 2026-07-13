@@ -69,6 +69,9 @@ public class StorageBridgeBlockEntity extends BlockEntity
     private LazyOptional<INetworkNodeProxy<BridgeNetworkNode>> nodeProxyCapability;
     private boolean rsNodeRegistered = false;
     private boolean initialized = false;
+    // 区分"方块被破坏"与"区块卸载"：MC 在区块卸载时会先调用 onChunkUnloaded 再调用 setRemoved，
+    // 因此可用该标志在 setRemoved 中判断是否为真正的方块破坏（参照 RS BaseBlockEntity）。
+    private boolean unloaded = false;
 
     private boolean wasRSConnected = false;
     private boolean wasAE2Connected = false;
@@ -118,7 +121,9 @@ public class StorageBridgeBlockEntity extends BlockEntity
 
     @Override
     public void mountInventories(IStorageMounts storageMounts) {
-        storageMounts.mount(rsToAeStorage);
+        // 将 AE2 侧优先级传递给 AE2 存储系统，否则 RS 桥默认 0 优先级，
+        // 永远竞争不过 ME 驱动器/存储总线等。
+        storageMounts.mount(rsToAeStorage, getAE2Priority());
     }
 
     @Override
@@ -295,11 +300,7 @@ public class StorageBridgeBlockEntity extends BlockEntity
                 if (existingNode instanceof BridgeNetworkNode existingBridgeNode) {
                     existingBridgeNode.setOwner(this);
                     this.rsNode = existingBridgeNode;
-                    if (existingBridgeNode.getNetwork() != null) {
-                        existingBridgeNode.getNetwork().getNodeGraph().invalidate(
-                                com.refinedmods.refinedstorage.api.util.Action.PERFORM,
-                                level, worldPosition);
-                    }
+                    invalidateRSGraph(existingBridgeNode);
                     rsNodeRegistered = true;
                 } else if (this.rsNode != null) {
                     manager.setNode(worldPosition, this.rsNode);
@@ -307,6 +308,30 @@ public class StorageBridgeBlockEntity extends BlockEntity
                 }
             }
         }
+    }
+
+    /**
+     * 触发 RS 网络节点图重扫。
+     * <p>
+     * 关键：origin 必须使用 <b>控制器位置</b>（{@code network.getPosition()}），
+     * 而不是桥接方块自身位置。RS 的 {@code NetworkNodeGraph.invalidate} 从 origin
+     * 方块实体获取起点节点做 BFS；若以自身位置为 origin，而此刻自身节点已失效
+     * （例如方块正在被破坏），起点为 null 会导致遍历立即结束，整个网络节点图被
+     * 清空（entries 变空），控制器随之断开、网络停止。使用控制器位置可保证始终
+     * 从一个存活节点出发重建整图。这与 RS 原版
+     * {@code NetworkNodeBlockEntity.onRemovedNotDueToChunkUnload} 的做法一致。
+     */
+    private void invalidateRSGraph(@Nullable BridgeNetworkNode node) {
+        if (node == null) {
+            return;
+        }
+        INetwork network = node.getNetwork();
+        if (network == null) {
+            return;
+        }
+        network.getNodeGraph().invalidate(
+                com.refinedmods.refinedstorage.api.util.Action.PERFORM,
+                network.getLevel(), network.getPosition());
     }
 
     private void onRSConnectionChanged(boolean connected) {
@@ -326,10 +351,8 @@ public class StorageBridgeBlockEntity extends BlockEntity
             var manager = API.instance().getNetworkNodeManager(serverLevel);
             if (manager != null) {
                 INetworkNode node = manager.getNode(worldPosition);
-                if (node instanceof BridgeNetworkNode bridgeNode && bridgeNode.getNetwork() != null) {
-                    bridgeNode.getNetwork().getNodeGraph().invalidate(
-                            com.refinedmods.refinedstorage.api.util.Action.PERFORM,
-                            level, worldPosition);
+                if (node instanceof BridgeNetworkNode bridgeNode) {
+                    invalidateRSGraph(bridgeNode);
                 }
             }
         }
@@ -422,13 +445,9 @@ public class StorageBridgeBlockEntity extends BlockEntity
                 if (existingNode instanceof BridgeNetworkNode existingBridgeNode) {
                     existingBridgeNode.setOwner(be);
                     be.rsNode = existingBridgeNode;
-                    // Re-register and force RS graph rebuild
+                    // Re-register and force RS graph rebuild（以控制器位置为 origin）
                     manager.setNode(be.worldPosition, be.rsNode);
-                    if (existingBridgeNode.getNetwork() != null) {
-                        existingBridgeNode.getNetwork().getNodeGraph().invalidate(
-                                com.refinedmods.refinedstorage.api.util.Action.PERFORM,
-                                be.level, be.worldPosition);
-                    }
+                    be.invalidateRSGraph(existingBridgeNode);
                 } else {
                     be.rsNode = new BridgeNetworkNode(be, be.level, be.worldPosition);
                     manager.setNode(be.worldPosition, be.rsNode);
@@ -489,7 +508,11 @@ public class StorageBridgeBlockEntity extends BlockEntity
     @Override
     public void setPriority(int newValue) {
         switch (priorityTarget) {
-            case AE2 -> configManager.setAE2Priority(newValue);
+            case AE2 -> {
+                configManager.setAE2Priority(newValue);
+                // 优先级改变后必须让 AE2 重新 mount 本节点，否则新优先级不生效
+                IStorageProvider.requestUpdate(mainNode);
+            }
             case RS -> configManager.setRSPriority(newValue);
         }
         setChanged();
@@ -512,19 +535,42 @@ public class StorageBridgeBlockEntity extends BlockEntity
     @Override
     public void setRemoved() {
         super.setRemoved();
+        // 仅销毁 AE2 侧网格节点。setRemoved 在方块破坏与区块卸载两种情况下都会触发，
+        // 因此这里绝不能无条件移除 RS 节点——区块卸载时移除 RS 节点会误删网络节点、破坏网络。
+        // MC 在区块卸载时先调用 onChunkUnloaded(置 unloaded=true) 再调用本方法，
+        // 故仅当 !unloaded（真正的方块破坏）时才移除 RS 节点并重扫网络。
         mainNode.destroy();
+        if (!unloaded) {
+            onRemovedNotDueToChunkUnload();
+        }
+    }
 
+    @Override
+    public void onChunkUnloaded() {
+        super.onChunkUnloaded();
+        // 区块卸载：只销毁 AE2 节点，保留 RS 节点（重新加载时恢复），不重扫 RS 网络。
+        unloaded = true;
+        mainNode.destroy();
+    }
+
+    /**
+     * 仅在方块被真正破坏（而非区块卸载）时调用。此处才移除 RS 网络节点并触发重扫。
+     * 参照 RS 原版 {@code NetworkNodeBlockEntity.onRemovedNotDueToChunkUnload}：
+     * 先从 manager 移除节点，再以<b>控制器位置</b>为 origin 让网络从存活节点重建图。
+     * 注意：本类直接继承 MC 的 BlockEntity，父类没有此方法，故不能加 @Override，
+     * 也不能调用 super；由 setRemoved 在 !unloaded 时主动调用。
+     */
+    private void onRemovedNotDueToChunkUnload() {
         if (level instanceof ServerLevel serverLevel) {
             var manager = API.instance().getNetworkNodeManager(serverLevel);
             if (manager != null) {
                 INetworkNode node = manager.getNode(worldPosition);
-                if (node != null) {
-                    manager.removeNode(worldPosition);
-                    if (node.getNetwork() != null) {
-                        node.getNetwork().getNodeGraph().invalidate(
-                                com.refinedmods.refinedstorage.api.util.Action.PERFORM,
-                                level, worldPosition);
-                    }
+                manager.removeNode(worldPosition);
+                if (node != null && node.getNetwork() != null) {
+                    INetwork network = node.getNetwork();
+                    network.getNodeGraph().invalidate(
+                            com.refinedmods.refinedstorage.api.util.Action.PERFORM,
+                            network.getLevel(), network.getPosition());
                 }
             }
         }

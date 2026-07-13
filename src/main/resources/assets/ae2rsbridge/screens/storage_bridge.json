@@ -3,7 +3,7 @@
   "includes": ["common/common.json", "common/player_inventory.json"],
   "generatedBackground": {
     "width": 176,
-    "height": 178
+    "height": 222
   },
   "text": {
     "dialog_title": {
