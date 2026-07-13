@@ -1,7 +1,7 @@
 modLoader="javafml"
 loaderVersion="${loader_version_range}"
 license="${mod_license}"
-issueTrackerURL="https://github.com/ae2rsbridge/ae2rsbridge/issues"
+issueTrackerURL="https://github.com/Kalloer1/ae2rsbridge/issues"
 
 [[mods]]
 modId="${mod_id}"
@@ -19,29 +19,31 @@ Bidirectional storage bridge between Applied Energistics 2 and Refined Storage.
 '''
 
 [[dependencies.${mod_id}]]
-    modId="forge"
-    mandatory=true
-    versionRange="${forge_version_range}"
+    modId="neoforge"
+    type="required"
+    versionRange="${neo_version_range}"
     ordering="NONE"
     side="BOTH"
 
 [[dependencies.${mod_id}]]
     modId="minecraft"
-    mandatory=true
+    type="required"
     versionRange="${minecraft_version_range}"
     ordering="NONE"
     side="BOTH"
 
 [[dependencies.${mod_id}]]
     modId="ae2"
-    mandatory=true
-    versionRange="[15.2.0,)"
+    type="required"
+    # AE2 for 1.21.1 (verify exact range on release)
+    versionRange="[19.0.0,)"
     ordering="AFTER"
     side="BOTH"
 
 [[dependencies.${mod_id}]]
     modId="refinedstorage"
-    mandatory=true
-    versionRange="[1.12.0,)"
+    type="required"
+    # Refined Storage 2 (1.21.1) — verify modId + range against RS2 release
+    versionRange="[2.0.0,)"
     ordering="AFTER"
     side="BOTH"
