@@ -1,7 +1,9 @@
 plugins {
+    id 'java'
     id 'eclipse'
     id 'idea'
-    id 'net.minecraftforge.gradle' version '[6.0,6.2)'
+    // NeoForge ModDevGradle — verify latest 2.0.x at https://github.com/neoforged/ModDevGradle
+    id 'net.neoforged.moddev' version '2.0.78'
 }
 
 version = mod_version
@@ -11,20 +13,14 @@ base {
     archivesName = mod_id
 }
 
-java.toolchain.languageVersion = JavaLanguageVersion.of(17)
-
-minecraft {
-    mappings channel: 'official', version: '1.20.1'
-}
+// Minecraft 1.21.1 requires Java 21
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 
 repositories {
     mavenCentral()
     maven {
-        name = 'CurseMaven'
-        url = 'https://www.cursemaven.com'
-        content {
-            includeGroup 'curse.maven'
-        }
+        name = 'NeoForged'
+        url = 'https://maven.neoforged.net/releases'
     }
     maven {
         name = 'Modrinth'
@@ -33,39 +29,77 @@ repositories {
             includeGroup 'maven.modrinth'
         }
     }
+    maven {
+        name = 'CurseMaven'
+        url = 'https://www.cursemaven.com'
+        content {
+            includeGroup 'curse.maven'
+        }
+    }
+    maven {
+        // Refined Mods (Refined Storage 2) maven
+        name = 'Refined Mods'
+        url = 'https://maven.refinedmods.com/releases'
+    }
     flatDir {
         name 'libs'
         dir file('libs')
     }
 }
 
+neoForge {
+    version = neo_version
+
+    // Parchment mappings for readable parameter/field names (optional)
+    parchment {
+        minecraftVersion = parchment_minecraft
+        mappingsVersion = parchment_version
+    }
+
+    runs {
+        client {
+            client()
+        }
+        server {
+            server()
+        }
+    }
+
+    mods {
+        "${mod_id}" {
+            sourceSet sourceSets.main
+        }
+    }
+}
+
 dependencies {
-    minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
-
-    // AE2 + dependency GuideME (local jars)
-    implementation files('libs/appliedenergistics2-forge-15.4.10.jar')
-    implementation files('libs/guideme-20.1.15.jar')
-
-    // Refined Storage (local jar)
-    implementation files('libs/refinedstorage-1.12.4.jar')
+    // === 1.21.1 dependency jars (place in libs/ or use maven coordinates) ===
+    // AE2 for 1.21.1 — via Modrinth maven (verify version slug/id):
+    //   compileOnly "maven.modrinth:ae2:${ae2_version}"
+    // Refined Storage 2 (1.21.1, NeoForge) — full API rewrite vs 1.20.1:
+    //   compileOnly "maven.modrinth:refined-storage:${refinedstorage_version}"
+    //
+    // Until the 1.21.1 dep jars are wired up, the RS/AE2 integration
+    // sources will NOT compile against the old (1.20.1) API. See PORTING.md.
 }
 
 tasks.named('processResources', ProcessResources).configure {
     var replaceProperties = [
-            minecraft_version   : minecraft_version,
-            minecraft_version_range: '[1.20.1,1.20.2)',
-            forge_version_range : '[47,)',
-            loader_version_range: '[47,)',
-            mod_id               : mod_id,
-            mod_name             : mod_name,
-            mod_license          : 'MIT',
-            mod_version          : mod_version,
-            mod_authors          : mod_authors,
-            mod_description      : mod_description,
+            minecraft_version       : minecraft_version,
+            minecraft_version_range : minecraft_version_range,
+            neo_version             : neo_version,
+            neo_version_range       : neo_version_range,
+            loader_version_range    : loader_version_range,
+            mod_id                  : mod_id,
+            mod_name                : mod_name,
+            mod_license             : 'MIT',
+            mod_version             : mod_version,
+            mod_authors             : mod_authors,
+            mod_description         : mod_description,
     ]
     inputs.properties replaceProperties
 
-    filesMatching(['META-INF/mods.toml', 'pack.mcmeta']) {
+    filesMatching(['META-INF/neoforge.mods.toml', 'pack.mcmeta']) {
         expand replaceProperties + [project: project]
     }
 }
