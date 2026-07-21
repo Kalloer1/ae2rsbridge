@@ -56,7 +56,7 @@ public class AE2NetworkToRSStorage implements ExternalStorageProvider {
     }
 
     private static Actionable toAE2Action(Action action) {
-        return action == Action.PERFORM ? Actionable.MODULATE : Actionable.SIMULATE;
+        return action == Action.EXECUTE ? Actionable.MODULATE : Actionable.SIMULATE;
     }
 
     /**
@@ -118,7 +118,7 @@ public class AE2NetworkToRSStorage implements ExternalStorageProvider {
         if (key == null) {
             return 0;
         }
-        if (bridge.isNonStackableOnly() && key.getMaxStackSize() > 1) {
+        if (bridge.isNonStackableOnly() && key instanceof AEItemKey itemKey && itemKey.getMaxStackSize() > 1) {
             return 0;
         }
 

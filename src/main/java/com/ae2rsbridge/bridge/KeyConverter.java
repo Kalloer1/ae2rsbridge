@@ -62,9 +62,9 @@ public final class KeyConverter {
             return null;
         }
         Fluid fluid = resource.fluid();
-        // RS2 的 FluidResource 与 AE2 的 FluidStack 使用相同的 DataComponentPatch，
-        // 直接复用其组件构造 FluidStack 再交给 AE2。
-        FluidStack stack = new FluidStack(fluid, 1, resource.components());
+        // 注：RS2 的 FluidResource 组件为 DataComponentPatch，与 1.21.1 的 FluidStack(PatchedDataComponentMap)
+        // 类型不匹配；此处用两参构造器丢弃组件（绝大多数流体无组件，足以桥接）。
+        FluidStack stack = new FluidStack(fluid, 1);
         return AEFluidKey.of(stack);
     }
 

@@ -76,7 +76,7 @@ public final class StyleLoader {
         }
 
         ResourceManager resourceManager = Minecraft.getInstance().getResourceManager();
-        ResourceLocation resourceId = new ResourceLocation(NAMESPACE, path.substring(1));
+        ResourceLocation resourceId = ResourceLocation.fromNamespaceAndPath(NAMESPACE, path.substring(1));
         var resource = resourceManager.getResource(resourceId)
                 .orElseThrow(() -> new FileNotFoundException(resourceId.toString()));
 

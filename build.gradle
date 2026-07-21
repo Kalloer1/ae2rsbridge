@@ -2,8 +2,15 @@ plugins {
     id 'java'
     id 'eclipse'
     id 'idea'
-    // NeoForge ModDevGradle — verify latest 2.0.x at https://github.com/neoforged/ModDevGradle
-    id 'net.neoforged.moddev' version '2.0.78'
+    // NeoForge ModDevGradle 2.0.142
+    // 注意：NeoForge 21.1.209 已彻底移除 net.neoforged.fml 旧 API
+    // （RegistryObject / FMLJavaModLoadingContext / NetworkHooks / ModLoadingContext 均不存在）。
+    // 因此 mod 源码已移植到新 API：
+    //   RegistryObject<T>        -> DeferredHolder<T,I>
+    //   FMLJavaModLoadingContext -> @Mod 构造函数接收 IEventBus + ModContainer
+    //   NetworkHooks.openScreen  -> player.openMenu(...)
+    //   ModLoadingContext        -> ModContainer.registerConfig(...)
+    id 'net.neoforged.moddev' version '2.0.142'
 }
 
 version = mod_version
@@ -78,8 +85,9 @@ neoForge {
 
 dependencies {
     // === AE2 1.21.1 (NeoForge) — Maven Central, group org.appliedenergistics ===
-    // :api classifier = API-only jar for compile; full jar for dev runs.
-    compileOnly "org.appliedenergistics:appliedenergistics2:${ae2_version}:api"
+    // 编译必须挂完整 jar：AEBaseMenu / appeng.client.gui.* / appeng.helpers.* 等实现类
+    // 不在 :api 桩jar（仅 appeng.api.*）内。ModDevGradle 会按项目映射(parchment)自动重映射。
+    compileOnly "org.appliedenergistics:appliedenergistics2:${ae2_version}"
     runtimeOnly "org.appliedenergistics:appliedenergistics2:${ae2_version}"
 
     // === Refined Storage 2 (RS2) 2.0.0 (NeoForge) ===
@@ -88,6 +96,9 @@ dependencies {
     //   compileOnly "com.refinedmods.refinedstorage:refinedstorage-neoforge:${refinedstorage_version}"
     compileOnly files('libs/rs2-1.21.1.jar')
     runtimeOnly files('libs/rs2-1.21.1.jar')
+
+    // === 注解（@Nullable/@Nonnull）— NeoForge 1.21.1 不再提供 javax.annotation ===
+    compileOnly 'org.jetbrains:annotations:24.1.0'
 }
 
 tasks.named('processResources', ProcessResources).configure {

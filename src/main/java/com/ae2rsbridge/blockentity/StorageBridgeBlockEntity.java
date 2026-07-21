@@ -35,12 +35,12 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.entity.BlockEntityType;
+import net.minecraft.core.HolderLookup;
 import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.energy.IEnergyStorage;
 
-import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
+import org.jetbrains.annotations.Nullable;
 import java.util.EnumSet;
 
 /**
@@ -194,7 +194,6 @@ public class StorageBridgeBlockEntity extends AbstractNetworkNodeContainerBlockE
 
     // ===== 显示 / 状态 =====
 
-    @Override
     public ItemStack getDisplayStack() {
         return new ItemStack(AE2RSBridge.STORAGE_BRIDGE_ITEM.get());
     }
@@ -392,17 +391,17 @@ public class StorageBridgeBlockEntity extends AbstractNetworkNodeContainerBlockE
     }
 
     @Override
-    public void saveAdditional(CompoundTag tag) {
-        super.saveAdditional(tag);
+    public void saveAdditional(CompoundTag tag, HolderLookup.Provider registries) {
+        super.saveAdditional(tag, registries);
         mainNode.saveToNBT(tag);
         tag.putInt("feEnergy", energyBridge.getFECurrentPower());
         tag.putBoolean("activeOutput", energyBridge.isActiveOutput());
-        configManager.writeToNBT(tag);
+        configManager.writeToNBT(tag, registries);
     }
 
     @Override
-    public void load(CompoundTag tag) {
-        super.load(tag);
+    public void loadAdditional(CompoundTag tag, HolderLookup.Provider registries) {
+        super.loadAdditional(tag, registries);
         mainNode.loadFromNBT(tag);
         if (tag.contains("feEnergy")) {
             energyBridge.setFEEnergy(tag.getInt("feEnergy"));
@@ -410,7 +409,7 @@ public class StorageBridgeBlockEntity extends AbstractNetworkNodeContainerBlockE
         if (tag.contains("activeOutput")) {
             energyBridge.setActiveOutput(tag.getBoolean("activeOutput"));
         }
-        configManager.readFromNBT(tag);
+        configManager.readFromNBT(tag, registries);
     }
 
     // ===== IPriorityHost - 当前正在编辑的优先级目标 =====

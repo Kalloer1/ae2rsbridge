@@ -6,7 +6,6 @@ import com.ae2rsbridge.menu.StorageBridgeMenu;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.MenuProvider;
 import net.minecraft.world.entity.player.Inventory;
@@ -21,14 +20,19 @@ import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
-import net.neoforged.neoforge.network.NetworkHooks;
 
-import javax.annotation.Nullable;
+import com.mojang.serialization.MapCodec;
+import org.jetbrains.annotations.Nullable;
 
 public class StorageBridgeBlock extends BaseEntityBlock {
 
     public StorageBridgeBlock(BlockBehaviour.Properties properties) {
         super(properties);
+    }
+
+    @Override
+    protected MapCodec<StorageBridgeBlock> codec() {
+        return simpleCodec(StorageBridgeBlock::new);
     }
 
     @Override
@@ -51,8 +55,8 @@ public class StorageBridgeBlock extends BaseEntityBlock {
     }
 
     @Override
-    public InteractionResult use(BlockState state, Level level, BlockPos pos, Player player,
-            InteractionHand hand, BlockHitResult hit) {
+    public InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player,
+            BlockHitResult hit) {
         if (!level.isClientSide() && player instanceof ServerPlayer serverPlayer) {
             BlockEntity be = level.getBlockEntity(pos);
             if (be instanceof StorageBridgeBlockEntity bridgeBE) {
@@ -64,7 +68,7 @@ public class StorageBridgeBlock extends BaseEntityBlock {
 
     /** 静态方法，供子菜单返回时重新打开主菜单 */
     public static void openMainMenu(ServerPlayer player, StorageBridgeBlockEntity bridgeBE) {
-        NetworkHooks.openScreen(player, new MenuProvider() {
+        player.openMenu(new MenuProvider() {
             @Override
             public Component getDisplayName() {
                 return Component.translatable("block.ae2rsbridge.storage_bridge");

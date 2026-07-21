@@ -62,13 +62,13 @@ public class StorageBridgeScreen extends AEBaseScreen<StorageBridgeMenu> {
         this.stackableFilterButton.setState(menu.isNonStackableOnly());
         addToLeftToolbar(this.stackableFilterButton);
 
-        // ── 两个优先级子界面入口（右上角扳手标签页） ──
+        // ── 两个优先级子界面入口（右上角，使用 AE2 内置 PRIORITY 图标） ──
         widgets.add("openAE2Priority", new TabButton(
-                Icon.WRENCH,
+                Icon.PRIORITY,
                 Component.translatable("gui.ae2rsbridge.ae2_priority_button"),
                 btn -> menu.requestOpenAE2Priority()));
         widgets.add("openRSPriority", new TabButton(
-                Icon.WRENCH,
+                Icon.PRIORITY,
                 Component.translatable("gui.ae2rsbridge.rs_priority_button"),
                 btn -> menu.requestOpenRSPriority()));
     }

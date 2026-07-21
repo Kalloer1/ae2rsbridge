@@ -47,7 +47,7 @@ public class RSNetworkToAEStorage implements MEStorage {
     }
 
     private static Action toRSAction(Actionable mode) {
-        return mode == Actionable.MODULATE ? Action.PERFORM : Action.SIMULATE;
+        return mode == Actionable.MODULATE ? Action.EXECUTE : Action.SIMULATE;
     }
 
     @Override

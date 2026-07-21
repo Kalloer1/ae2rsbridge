@@ -5,6 +5,7 @@ import appeng.api.config.Setting;
 import appeng.api.config.Settings;
 import appeng.api.util.IConfigManager;
 import appeng.api.util.UnsupportedSettingException;
+import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.Tag;
 
@@ -53,7 +54,6 @@ public class BridgeConfigManager implements IConfigManager {
         return enumSettings.keySet();
     }
 
-    @Override
     public <T extends Enum<T>> void registerSetting(Setting<T> setting, T defaultValue) {
         enumSettings.put(setting, defaultValue);
     }
@@ -119,7 +119,7 @@ public class BridgeConfigManager implements IConfigManager {
     // ===== NBT 读写 =====
 
     @Override
-    public void writeToNBT(CompoundTag destination) {
+    public void writeToNBT(CompoundTag destination, HolderLookup.Provider registries) {
         for (Map.Entry<Setting<?>, Enum<?>> entry : enumSettings.entrySet()) {
             destination.putString(entry.getKey().getName(), entry.getValue().name());
         }
@@ -130,7 +130,7 @@ public class BridgeConfigManager implements IConfigManager {
     }
 
     @Override
-    public boolean readFromNBT(CompoundTag src) {
+    public boolean readFromNBT(CompoundTag src, HolderLookup.Provider registries) {
         boolean anythingRead = false;
 
         for (Setting<?> setting : enumSettings.keySet()) {
@@ -169,6 +169,58 @@ public class BridgeConfigManager implements IConfigManager {
         }
 
         return anythingRead;
+    }
+
+    @Override
+    public Map<String, String> exportSettings() {
+        Map<String, String> map = new HashMap<>();
+        for (Map.Entry<Setting<?>, Enum<?>> entry : enumSettings.entrySet()) {
+            map.put(entry.getKey().getName(), entry.getValue().name());
+        }
+        for (Map.Entry<String, Integer> entry : intSettings.entrySet()) {
+            map.put(entry.getKey(), String.valueOf(entry.getValue()));
+        }
+        return map;
+    }
+
+    @Override
+    public boolean importSettings(Map<String, String> settings) {
+        boolean anythingImported = false;
+        for (Map.Entry<String, String> entry : settings.entrySet()) {
+            String key = entry.getKey();
+            String value = entry.getValue();
+
+            // 枚举设置：按名字匹配
+            for (Setting<?> setting : enumSettings.keySet()) {
+                if (setting.getName().equals(key)) {
+                    try {
+                        setting.setFromString(this, value);
+                        anythingImported = true;
+                    } catch (IllegalArgumentException ignored) {
+                    }
+                    break;
+                }
+            }
+
+            // 整型设置（AE2/RS 优先级）
+            if (intSettings.containsKey(key)) {
+                try {
+                    intSettings.put(key, Integer.parseInt(value));
+                    anythingImported = true;
+                } catch (NumberFormatException ignored) {
+                }
+            }
+
+            // “仅输送不可堆叠物品”开关
+            if (BridgeConfigSettings.NON_STACKABLE_ONLY_KEY.equals(key)) {
+                this.nonStackableOnly = Boolean.parseBoolean(value);
+                anythingImported = true;
+            }
+        }
+        if (anythingImported) {
+            onChanged();
+        }
+        return anythingImported;
     }
 
     // ===== 工具方法 =====
