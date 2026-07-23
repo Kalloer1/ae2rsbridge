@@ -281,7 +281,8 @@ public class RSNetworkCellInventory implements StorageCell {
                 boolean had = this.network != null;
                 if (had) {
                     detach();
-                    markDirtyAndNotify(); // 之前连着、现在断了 → 清掉 AE 侧残留旧视图
+                    // 之前连着、现在断了 → 清掉 AE 侧残留旧视图（仅标记待刷新，由 tick 推，不可同步 requestUpdate）。
+                    NEEDS_NOTIFY.put(this, Boolean.TRUE);
                 }
                 registerPending();
                 LOGGER.warn("[rs2ae_cell] resolveNetwork: 在 {} 处找到 RS 能力，但其网络节点尚未加入 RS 网络"
@@ -303,8 +304,9 @@ public class RSNetworkCellInventory implements StorageCell {
             LOGGER.info("[rs2ae_cell] resolveNetwork: 成功解析 RS 网络 @{} (dir={}, root={}, 资源种类数={})",
                     bound, usedDir, root != null, size);
             registerListener();
-            // 解析成功 → 立即让 AE2 重新扫描本单元，终端立刻显示 RS 内容。
-            markDirtyAndNotify();
+            // 解析成功 → 标记待刷新，由服务端 tick 推 requestUpdate（绝不可在构造/挂载期同步 requestUpdate，否则重入栈溢出）。
+            // 初始挂载时 AE2 会自行读取 getAvailableStacks，无需主动 requestUpdate。
+            NEEDS_NOTIFY.put(this, Boolean.TRUE);
         } catch (Throwable t) {
             LOGGER.error("[rs2ae_cell] resolveNetwork 失败；单元暂时不生效", t);
             this.network = null;
@@ -338,17 +340,18 @@ public class RSNetworkCellInventory implements StorageCell {
         r.addListener(this.listener);
     }
 
-    /** 置脏标并安排向 AE2 推送刷新（requestUpdate）。 */
+    /**
+     * 置脏标并登记到待推送队列，由服务端 tick（{@link #tickPending}）统一调用
+     * {@link IStorageProvider#requestUpdate} 推刷新。
+     * <p>
+     * <b>禁止在此同步调用 requestUpdate</b>：单元格在 AE2 网格挂载 / 重建存储缓存期间被构造，
+     * 此时若同步 requestUpdate → {@code refreshNodeStorageProvider} 重入 → 本单元再次被构造
+     * → {@code resolveNetwork} → 再次 requestUpdate，形成无限递归直至 StackOverflowError，
+     * 拖垮整个 AE 网格（这正是 41f5ec1 引入的致命 bug）。推送只能发生在服务端 tick 这种
+     * 非挂载期的、安全的上下文中。
+     */
     private void markDirtyAndNotify() {
         this.dirty = true;
-        // 立即推一次，确保挂载 / AE2 操作当下就能刷新；tick 会兜底重推仍未清脏的单元。
-        if (gridNode != null) {
-            try {
-                IStorageProvider.requestUpdate(gridNode);
-            } catch (Throwable t) {
-                LOGGER.warn("[rs2ae_cell] requestUpdate 失败（已忽略）", t);
-            }
-        }
         NEEDS_NOTIFY.put(this, Boolean.TRUE);
     }
 
