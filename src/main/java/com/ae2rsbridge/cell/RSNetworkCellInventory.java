@@ -37,6 +37,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.lang.ref.WeakReference;
+import java.util.ArrayList;
+import java.util.Map;
+import java.util.WeakHashMap;
 
 /**
  * 把 RS 网络以 AE2 原生存储单元（{@link StorageCell}）形式暴露给 AE2 网格。
@@ -73,6 +76,47 @@ public class RSNetworkCellInventory implements StorageCell {
             null, Direction.DOWN, Direction.UP, Direction.NORTH, Direction.SOUTH, Direction.WEST, Direction.EAST
     };
 
+    /**
+     * 待解析队列：当 RS 网络暂时不可达（区块未加载 / 控制器未连网 / 维度未就绪 / 世界加载时
+     * RS 图尚未重建）时，单元放入此队列，由 {@link #tickPending()} 在服务端每约 1 秒尝试重新
+     * 解析一次。一旦 RS 可达即自动接入并移出队列，玩家无需重新插拔单元。
+     * <p>
+     * 这是修复「绑定后塞入驱动器但 AE 读不到 RS」的关键：AE2 只在挂载时调一次
+     * {@code getAvailableStacks}，之后仅依赖本单元的 {@code RootStorageListener} 触发
+     * {@code invalidateCache()} 才重新查询。若挂载瞬间 RS 未就绪，监听从未注册，单元会永久为空；
+     * 此机制保证 RS 上线后自愈。
+     * <p>
+     * 用 WeakHashMap 以单元实例为键 —— 单元被驱动器卸载并 GC 后条目自动消失，不会内存泄漏。
+     */
+    private static final Map<RSNetworkCellInventory, Boolean> PENDING = new WeakHashMap<>();
+    private static final int RETRY_INTERVAL_TICKS = 20; // ~1s @ 20TPS
+    private static int tickCounter = 0;
+
+    /** 由 {@link com.ae2rsbridge.AE2RSBridge} 在服务端刻事件（{@code ServerTickEvent.Post}）中调用。 */
+    public static void tickPending() {
+        if (++tickCounter % RETRY_INTERVAL_TICKS != 0) {
+            return;
+        }
+        if (PENDING.isEmpty()) {
+            return;
+        }
+        // 复制键集，避免 resolveNetwork 内部改动 PENDING 导致 ConcurrentModificationException
+        for (RSNetworkCellInventory cell : new ArrayList<>(PENDING.keySet())) {
+            try {
+                cell.resolveNetwork();
+            } catch (Throwable t) {
+                LOGGER.warn("[rs2ae_cell] tickPending 中 resolveNetwork 异常（已忽略）", t);
+            }
+        }
+    }
+
+    private void registerPending() {
+        if (!PENDING.containsKey(this)) {
+            PENDING.put(this, Boolean.TRUE);
+            LOGGER.info("[rs2ae_cell] 单元已加入待解析队列（RS 未就绪），服务端将每秒重试直到 RS 可达");
+        }
+    }
+
     @Nullable private final ISaveProvider host;
     @Nullable private final Level level;
     @Nullable private final BlockPos bound;
@@ -95,6 +139,11 @@ public class RSNetworkCellInventory implements StorageCell {
         LOGGER.info("[rs2ae_cell] cell constructed; bound={}, levelPresent={}, host={}",
                 bound, level != null, host != null ? host.getClass().getSimpleName() : "null");
         resolveNetwork();
+        if (root == null) {
+            // RS 尚未可达（区块未加载 / 控制器未连网）：加入待解析队列，由服务端刻轮询重试，
+            // 一旦 RS 上线即自动接入，无需玩家重新插拔单元。
+            registerPending();
+        }
     }
 
     private void resolveNetwork() {
@@ -134,7 +183,8 @@ public class RSNetworkCellInventory implements StorageCell {
             }
             if (provider == null) {
                 LOGGER.warn("[rs2ae_cell] resolveNetwork: 在 {} 处查不到 NetworkNodeContainerProvider 能力"
-                        + "（RS 方块缺失 / 区块未加载 / 维度不符？）", bound);
+                        + "（RS 方块缺失 / 区块未加载 / 维度不符？），将定时重试", bound);
+                registerPending();
                 return;
             }
             Network net = null;
@@ -150,11 +200,14 @@ public class RSNetworkCellInventory implements StorageCell {
             }
             if (net == null) {
                 // RS 当前未接入网络（绑定方块尚未联网）：保持重试，直到 RS 上线。
-                if (this.network != null) {
+                boolean had = this.network != null;
+                if (had) {
                     detach();
+                    invalidateCache(); // 之前连着、现在断了 → 清掉 AE 侧残留旧视图
                 }
+                registerPending();
                 LOGGER.warn("[rs2ae_cell] resolveNetwork: 在 {} 处找到 RS 能力，但其网络节点尚未加入 RS 网络"
-                        + "（控制器未连接？）", bound);
+                        + "（控制器未连接？），将定时重试", bound);
                 return;
             }
             if (net == this.network) {
@@ -170,6 +223,7 @@ public class RSNetworkCellInventory implements StorageCell {
             int size = (this.root != null) ? this.root.getAll().size() : -1;
             LOGGER.info("[rs2ae_cell] resolveNetwork: 成功解析 RS 网络 @{} (dir={}, root={}, 资源种类数={})",
                     bound, usedDir, root != null, size);
+            PENDING.remove(this);
             registerListener();
         } catch (Throwable t) {
             LOGGER.error("[rs2ae_cell] resolveNetwork 失败；单元暂时不生效", t);

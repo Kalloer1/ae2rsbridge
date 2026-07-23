@@ -25,7 +25,7 @@ import java.util.List;
  * RS 网络存储单元物品。
  * <p>
  * 玩家<b>潜行 + 右键</b>任意 RS 网络方块（控制器 / 线缆等）将其绑定到该 RS 网络；
- * 之后把单元放进 ME 驱动器，AE2 即以原生存储单元形式读取该 RS 网络内容（只读）。
+ * 之后把单元放进 ME 驱动器，AE2 即以原生存储单元形式<b>读取并写入</b>该 RS 网络内容（双向桥接）。
  */
 public class RSNetworkStorageCellItem extends Item {
 
@@ -106,7 +106,7 @@ public class RSNetworkStorageCellItem extends Item {
         } else {
             tooltip.add(Component.literal("已绑定 RS 网络方块: " + bound.toShortString())
                     .withStyle(ChatFormatting.AQUA));
-            tooltip.add(Component.literal("放入 ME 驱动器即可让 AE2 读取 RS（只读）")
+            tooltip.add(Component.literal("放入 ME 驱动器即可让 AE2 读取并写入 RS（双向桥接）")
                     .withStyle(ChatFormatting.DARK_GRAY));
         }
     }

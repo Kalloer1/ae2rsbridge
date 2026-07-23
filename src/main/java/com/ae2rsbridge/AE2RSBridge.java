@@ -3,6 +3,7 @@ package com.ae2rsbridge;
 import appeng.api.storage.StorageCells;
 import com.ae2rsbridge.cell.CellFilter;
 import com.ae2rsbridge.cell.RSNetworkCellHandler;
+import com.ae2rsbridge.cell.RSNetworkCellInventory;
 import com.ae2rsbridge.item.RSNetworkStorageCellItem;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
@@ -13,6 +14,8 @@ import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
+import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredRegister;
 import org.slf4j.Logger;
@@ -58,6 +61,12 @@ public class AE2RSBridge {
         ITEMS.register(modEventBus);
         CREATIVE_MODE_TABS.register(modEventBus);
         modEventBus.addListener(this::commonSetup);
+        // 服务端每刻轮询待解析的 RS 网络单元，使挂载时 RS 未就绪的单元能在 RS 上线后自愈。
+        NeoForge.EVENT_BUS.addListener(ServerTickEvent.Post.class, this::onServerTick);
+    }
+
+    private void onServerTick(ServerTickEvent.Post event) {
+        RSNetworkCellInventory.tickPending();
     }
 
     private void commonSetup(FMLCommonSetupEvent event) {
