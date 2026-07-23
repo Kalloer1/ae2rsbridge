@@ -13,11 +13,10 @@ logoBlur=false
 description='''
 ${mod_description}
 
-Bidirectional storage bridge between Applied Energistics 2 and Refined Storage.
-- AE2 terminals can access RS disk storage
-- RS grids can access AE2 network storage
-- Only items and fluids are bridged (no gases, mana, etc.)
-- Acts as an energy converter between AE2 and Forge Energy (no self-consumption)
+将 Refined Storage 2 网络以 AE2 原生存储单元形式暴露给 AE2 网格。
+- 潜行右键 RS 线缆/控制器把「RS 网络存储单元」绑定到该 RS 网络
+- 把单元放入 ME 驱动器，AE2 终端即可原生读取 RS 网络内容
+- 只读（AE 可浏览/从 RS 提取，不写回 RS）；推模式刷新，空闲零开销
 '''
 
 [[dependencies.${mod_id}]]
