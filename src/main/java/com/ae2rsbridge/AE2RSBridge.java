@@ -23,7 +23,8 @@ import org.slf4j.LoggerFactory;
 
 /**
  * RS Network Cell —— 把 Refined Storage 2 网络以 AE2 原生存储单元形式暴露给 AE2 网格。
- * 模组只提供「RS 网络存储单元」物品：玩家潜行右键 RS 线缆/控制器绑定，放入 ME 驱动器即可让 AE2 单向读取 RS。
+ * <b>单向桥接</b>：只有 AE 网络能读取并在 RS 网络中存入物品；RS 网络无法反向访问 AE 网络。
+ * 玩家潜行右键 RS 线缆/控制器绑定，放入 ME 驱动器即可让 AE2 终端浏览并修改该 RS 网络。
  */
 @Mod(AE2RSBridge.MODID)
 public class AE2RSBridge {
@@ -66,7 +67,7 @@ public class AE2RSBridge {
     }
 
     private void onServerTick(ServerTickEvent.Post event) {
-        RSNetworkCellInventory.tickPending();
+        RSNetworkCellInventory.tickPending(event.getServer());
     }
 
     private void commonSetup(FMLCommonSetupEvent event) {

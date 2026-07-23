@@ -11,7 +11,7 @@ import org.jetbrains.annotations.Nullable;
 
 /**
  * 把 {@link RSNetworkStorageCellItem} 注册到 AE2 的存储单元体系，
- * 使 AE2 在 ME 驱动器中把它当作原生存储单元处理（双向桥接 RS 网络）。
+ * 使 AE2 在 ME 驱动器中把它当作原生存储单元处理（单向桥接：仅 AE 网络访问 RS 网络）。
  */
 public class RSNetworkCellHandler implements ICellHandler {
 
