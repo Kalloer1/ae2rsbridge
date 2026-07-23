@@ -12,6 +12,7 @@ import appeng.api.storage.cells.CellState;
 import appeng.api.storage.cells.StorageCell;
 import appeng.me.helpers.IGridConnectedBlockEntity;
 import com.ae2rsbridge.bridge.KeyConverter;
+import com.ae2rsbridge.cell.CellFilter;
 import com.ae2rsbridge.item.RSNetworkStorageCellItem;
 import com.refinedmods.refinedstorage.api.core.Action;
 import com.refinedmods.refinedstorage.api.network.Network;
@@ -56,12 +57,14 @@ public class RSNetworkCellInventory implements StorageCell {
     @Nullable private RootStorageListener listener;
     @Nullable private IManagedGridNode gridNode;
     @Nullable private KeyCounter cache;
+    private final CellFilter filter;
     private boolean dirty = true;
 
     public RSNetworkCellInventory(ItemStack is, @Nullable ISaveProvider host) {
         this.host = host;
         this.level = (host instanceof BlockEntity be) ? be.getLevel() : null;
         this.bound = RSNetworkStorageCellItem.getBoundRsBlock(is);
+        this.filter = (is.getItem() instanceof RSNetworkStorageCellItem item) ? item.getFilter() : CellFilter.ALL;
         if (host instanceof IGridConnectedBlockEntity gcb) {
             this.gridNode = gcb.getMainNode();
         }
@@ -158,7 +161,7 @@ public class RSNetworkCellInventory implements StorageCell {
                 continue;
             }
             AEKey aeKey = KeyConverter.toAEKey(resource);
-            if (aeKey != null) {
+            if (aeKey != null && filter.test(aeKey)) {
                 cache.add(aeKey, amount);
             }
         }
@@ -183,7 +186,7 @@ public class RSNetworkCellInventory implements StorageCell {
 
     @Override
     public long extract(AEKey key, long amount, Actionable mode, IActionSource source) {
-        if (amount <= 0 || key == null || root == null) {
+        if (amount <= 0 || key == null || root == null || !filter.test(key)) {
             return 0;
         }
         ResourceKey rsKey = KeyConverter.toRSKey(key);
@@ -201,7 +204,7 @@ public class RSNetworkCellInventory implements StorageCell {
 
     @Override
     public Component getDescription() {
-        return Component.literal("RS Network Cell");
+        return Component.literal("RS Network Cell (" + filter.name().toLowerCase() + ")");
     }
 
     @Override

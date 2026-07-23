@@ -1,4 +1,5 @@
 {
     "item.rs2ae-cell.rs_network_cell": "RS Network Storage Cell",
+    "item.rs2ae-cell.rs_network_cell_nonstackable": "RS Non-Stackable Cell",
     "itemGroup.rs2ae-cell": "RS Network Cell"
 }

@@ -1,5 +1,6 @@
 package com.ae2rsbridge.item;
 
+import com.ae2rsbridge.cell.CellFilter;
 import com.refinedmods.refinedstorage.neoforge.api.RefinedStorageNeoForgeApi;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
@@ -31,8 +32,16 @@ public class RSNetworkStorageCellItem extends Item {
     private static final Logger LOGGER = LoggerFactory.getLogger(RSNetworkStorageCellItem.class);
     private static final String BOUND_KEY = "boundRsBlock";
 
-    public RSNetworkStorageCellItem(Properties properties) {
+    private final CellFilter filter;
+
+    public RSNetworkStorageCellItem(Properties properties, CellFilter filter) {
         super(properties);
+        this.filter = filter;
+    }
+
+    /** 该单元向 AE2 暴露 RS 资源的过滤策略。 */
+    public CellFilter getFilter() {
+        return filter;
     }
 
     @Nullable
@@ -84,6 +93,13 @@ public class RSNetworkStorageCellItem extends Item {
     public void appendHoverText(ItemStack stack, TooltipContext context, List<Component> tooltip,
             TooltipFlag flag) {
         BlockPos bound = getBoundRsBlock(stack);
+        if (filter == CellFilter.NON_STACKABLE) {
+            tooltip.add(Component.literal("[不可堆叠专用] 仅向 AE2 暴露 RS 中的不可堆叠物品")
+                    .withStyle(ChatFormatting.GOLD));
+        } else {
+            tooltip.add(Component.literal("[全类型] 向 AE2 暴露 RS 中的全部物品与流体")
+                    .withStyle(ChatFormatting.GREEN));
+        }
         if (bound == null) {
             tooltip.add(Component.literal("未绑定 RS 网络 — 潜行右键 RS 线缆/控制器进行绑定")
                     .withStyle(ChatFormatting.GRAY));

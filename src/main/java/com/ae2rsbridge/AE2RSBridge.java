@@ -1,6 +1,7 @@
 package com.ae2rsbridge;
 
 import appeng.api.storage.StorageCells;
+import com.ae2rsbridge.cell.CellFilter;
 import com.ae2rsbridge.cell.RSNetworkCellHandler;
 import com.ae2rsbridge.item.RSNetworkStorageCellItem;
 import net.minecraft.core.registries.Registries;
@@ -35,13 +36,21 @@ public class AE2RSBridge {
             DeferredRegister.create(Registries.CREATIVE_MODE_TAB, MODID);
 
     public static final DeferredHolder<Item, RSNetworkStorageCellItem> RS_NETWORK_CELL_ITEM =
-            ITEMS.register("rs_network_cell", () -> new RSNetworkStorageCellItem(new Item.Properties()));
+            ITEMS.register("rs_network_cell",
+                    () -> new RSNetworkStorageCellItem(new Item.Properties(), CellFilter.ALL));
+
+    public static final DeferredHolder<Item, RSNetworkStorageCellItem> RS_NETWORK_CELL_NONSTACKABLE_ITEM =
+            ITEMS.register("rs_network_cell_nonstackable",
+                    () -> new RSNetworkStorageCellItem(new Item.Properties(), CellFilter.NON_STACKABLE));
 
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> CREATIVE_TAB =
             CREATIVE_MODE_TABS.register(MODID, () -> CreativeModeTab.builder()
                     .title(Component.translatable("itemGroup.rs2ae-cell"))
                     .icon(() -> new ItemStack(RS_NETWORK_CELL_ITEM.get()))
-                    .displayItems((params, output) -> output.accept(new ItemStack(RS_NETWORK_CELL_ITEM.get())))
+                    .displayItems((params, output) -> {
+                        output.accept(new ItemStack(RS_NETWORK_CELL_ITEM.get()));
+                        output.accept(new ItemStack(RS_NETWORK_CELL_NONSTACKABLE_ITEM.get()));
+                    })
                     .build());
 
     public AE2RSBridge(IEventBus modEventBus, ModContainer container) {

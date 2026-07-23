@@ -22,4 +22,7 @@ public class RSNetworkCellHandler implements ICellHandler {
     public StorageCell getCellInventory(ItemStack is, @Nullable ISaveProvider host) {
         return new RSNetworkCellInventory(is, host);
     }
+
+    // 过滤策略由物品自身携带（RSNetworkStorageCellItem.getFilter()），
+    // RSNetworkCellInventory 构造时从中读取，无需此处额外处理。
 }
