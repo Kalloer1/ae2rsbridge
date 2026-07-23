@@ -41,7 +41,7 @@ import java.lang.ref.WeakReference;
 /**
  * 把 RS 网络以 AE2 原生存储单元（{@link StorageCell}）形式暴露给 AE2 网格。
  * <p>
- * <b>只读</b>：AE 可浏览 / 从 RS 提取物品，但不能写回 RS（{@link #insert} 返回 0）。
+ * <b>读写</b>：AE 可浏览 / 从 RS 提取物品，也能把物品写入 RS 网络（双向桥接）。
  * <b>推模式（高性能）</b>：RS 存储变动时 {@link RootStorageListener} 回调 → 置脏标 +
  * 让驱动器所属 AE2 网格 {@code invalidateCache()}，平时 AE2 直接读缓存，零轮询开销。
  * <p>
@@ -54,15 +54,23 @@ public class RSNetworkCellInventory implements StorageCell {
     private static final Logger LOGGER = LoggerFactory.getLogger(RSNetworkCellInventory.class);
 
     /**
-     * 虚拟玩家 "AE"：本模组以只读方式把 RS 网络暴露给 AE2。每当 AE 经此单元从 RS 提取物品时，
-     * 用这个 Actor 标注来源，使 RS 的「谁在何时存入/取出」记录里显示为玩家 <b>AE</b>，
-     * 而非匿名的 Actor.EMPTY。写入（AE→RS）目前未开启，见后续机制提案。
+     * 虚拟玩家 "AE"：每当 AE 经此单元从 RS 提取或写入物品时，用这个 Actor 标注来源，
+     * 使 RS 的「谁在何时存入/取出」记录里显示为玩家 <b>AE</b>，而非匿名的 Actor.EMPTY。
      */
     private static final Actor AE_ACTOR = new Actor() {
         @Override
         public String getName() {
             return "AE";
         }
+    };
+
+    /**
+     * 查询 RS 能力时尝试的方向序列（含 null）。RS2 的 NetworkNodeContainerProvider 在注册时
+     * 忽略 side（lambda 为 {@code (be, side) -> be.getContainerProvider()}），因此任意方向都应命中；
+     * 这里仍做多方向兜底，杜绝任何方向敏感的实现差异导致 capability 查不到。
+     */
+    private static final Direction[] DIRECTIONS = {
+            null, Direction.DOWN, Direction.UP, Direction.NORTH, Direction.SOUTH, Direction.WEST, Direction.EAST
     };
 
     @Nullable private final ISaveProvider host;
@@ -84,21 +92,49 @@ public class RSNetworkCellInventory implements StorageCell {
         if (host instanceof IGridConnectedBlockEntity gcb) {
             this.gridNode = gcb.getMainNode();
         }
+        LOGGER.info("[rs2ae_cell] cell constructed; bound={}, levelPresent={}, host={}",
+                bound, level != null, host != null ? host.getClass().getSimpleName() : "null");
         resolveNetwork();
     }
 
     private void resolveNetwork() {
         try {
-            if (level == null || bound == null || level.isClientSide()) {
+            if (level == null) {
+                LOGGER.warn("[rs2ae_cell] resolveNetwork: level==null (host 不是 BlockEntity？host={})，无法解析 RS 网络",
+                        host != null ? host.getClass().getSimpleName() : "null");
+                return;
+            }
+            if (bound == null) {
+                LOGGER.warn("[rs2ae_cell] resolveNetwork: 未绑定 RS 网络方块，无法解析");
+                return;
+            }
+            if (level.isClientSide()) {
                 return;
             }
             BlockEntity be = level.getBlockEntity(bound);
             if (be == null) {
+                LOGGER.warn("[rs2ae_cell] resolveNetwork: 绑定坐标 {} 处无 BlockEntity（方块被移除/维度不符？）",
+                        bound);
                 return;
             }
             var cap = RefinedStorageNeoForgeApi.INSTANCE.getNetworkNodeContainerProviderCapability();
-            NetworkNodeContainerProvider provider = level.getCapability(cap, bound, Direction.UP);
+            NetworkNodeContainerProvider provider = null;
+            Direction usedDir = null;
+            for (Direction d : DIRECTIONS) {
+                try {
+                    NetworkNodeContainerProvider p = level.getCapability(cap, bound, d);
+                    if (p != null) {
+                        provider = p;
+                        usedDir = d;
+                        break;
+                    }
+                } catch (Throwable ignore) {
+                    // 某个方向查询异常则跳过，试下一个
+                }
+            }
             if (provider == null) {
+                LOGGER.warn("[rs2ae_cell] resolveNetwork: 在 {} 处查不到 NetworkNodeContainerProvider 能力"
+                        + "（RS 方块缺失 / 区块未加载 / 维度不符？）", bound);
                 return;
             }
             Network net = null;
@@ -113,10 +149,12 @@ public class RSNetworkCellInventory implements StorageCell {
                 }
             }
             if (net == null) {
-                // RS 当前未接入网络：若之前有绑定，先清理旧监听，避免泄漏；root 保持 null 等下次重试。
+                // RS 当前未接入网络（绑定方块尚未联网）：保持重试，直到 RS 上线。
                 if (this.network != null) {
                     detach();
                 }
+                LOGGER.warn("[rs2ae_cell] resolveNetwork: 在 {} 处找到 RS 能力，但其网络节点尚未加入 RS 网络"
+                        + "（控制器未连接？）", bound);
                 return;
             }
             if (net == this.network) {
@@ -129,9 +167,12 @@ public class RSNetworkCellInventory implements StorageCell {
             }
             this.network = net;
             this.root = this.network.getComponent(StorageNetworkComponent.class);
+            int size = (this.root != null) ? this.root.getAll().size() : -1;
+            LOGGER.info("[rs2ae_cell] resolveNetwork: 成功解析 RS 网络 @{} (dir={}, root={}, 资源种类数={})",
+                    bound, usedDir, root != null, size);
             registerListener();
         } catch (Throwable t) {
-            LOGGER.error("[rs2ae_cell] resolveNetwork failed; cell stays inactive", t);
+            LOGGER.error("[rs2ae_cell] resolveNetwork 失败；单元暂时不生效", t);
             this.network = null;
             this.root = null;
         }
@@ -156,7 +197,7 @@ public class RSNetworkCellInventory implements StorageCell {
                 self.invalidateCache();
             } catch (Throwable t) {
                 // 监听回调里的异常不要向外冒泡（RS 线程），仅记录。
-                LOGGER.warn("[rs2ae_cell] listener callback error (ignored)", t);
+                LOGGER.warn("[rs2ae_cell] listener 回调异常（已忽略）", t);
             }
         };
         this.listener = holder[0];
@@ -170,7 +211,7 @@ public class RSNetworkCellInventory implements StorageCell {
         try {
             gridNode.ifPresent(grid -> grid.getStorageService().invalidateCache());
         } catch (Throwable t) {
-            LOGGER.warn("[rs2ae_cell] invalidateCache failed (ignored)", t);
+            LOGGER.warn("[rs2ae_cell] invalidateCache 失败（已忽略）", t);
         }
     }
 
@@ -199,12 +240,15 @@ public class RSNetworkCellInventory implements StorageCell {
                     }
                 } catch (RuntimeException e) {
                     // 单条资源转换失败（罕见 RS 资源类型）跳过，绝不影响整体。
-                    LOGGER.warn("[rs2ae_cell] skipped a resource during rebuild", e);
+                    LOGGER.warn("[rs2ae_cell] rebuild 时跳过某条 RS 资源", e);
                 }
             }
             dirty = false;
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug("[rs2ae_cell] rebuild 完成：暴露给 AE 的资源种类数={}", cache.size());
+            }
         } catch (Throwable t) {
-            LOGGER.error("[rs2ae_cell] rebuild failed; cell reports empty until RS recovers", t);
+            LOGGER.error("[rs2ae_cell] rebuild 失败；单元降级为空直到 RS 恢复", t);
             cache = new KeyCounter();
             dirty = true; // 保持 dirty，稍后重试
         }
@@ -224,14 +268,32 @@ public class RSNetworkCellInventory implements StorageCell {
             }
         } catch (Throwable t) {
             // 绝不允许异常冒泡到 AE2 的 StorageService 缓存重建 —— 那会让整个网格崩溃。
-            LOGGER.error("[rs2ae_cell] getAvailableStacks failed; degrading to empty", t);
+            LOGGER.error("[rs2ae_cell] getAvailableStacks 失败；降级为空", t);
         }
     }
 
     @Override
     public long insert(AEKey key, long amount, Actionable mode, IActionSource source) {
-        // 只读：AE 不写回 RS 网络
-        return 0;
+        // 双向桥接：AE 经此单元把物品写入 RS 网络。
+        if (amount <= 0 || key == null || root == null || !filter.test(key)) {
+            return 0;
+        }
+        ResourceKey rsKey = KeyConverter.toRSKey(key);
+        if (rsKey == null) {
+            return 0;
+        }
+        int size = (int) Math.min(amount, Integer.MAX_VALUE);
+        try {
+            long inserted = root.insert(rsKey, size,
+                    mode == Actionable.MODULATE ? Action.EXECUTE : Action.SIMULATE, AE_ACTOR);
+            if (mode == Actionable.MODULATE && inserted > 0) {
+                dirty = true;
+            }
+            return inserted;
+        } catch (Throwable t) {
+            LOGGER.error("[rs2ae_cell] insert 失败；返回 0", t);
+            return 0;
+        }
     }
 
     @Override
@@ -252,7 +314,7 @@ public class RSNetworkCellInventory implements StorageCell {
             }
             return extracted;
         } catch (Throwable t) {
-            LOGGER.error("[rs2ae_cell] extract failed; returning 0", t);
+            LOGGER.error("[rs2ae_cell] extract 失败；返回 0", t);
             return 0;
         }
     }
@@ -287,7 +349,7 @@ public class RSNetworkCellInventory implements StorageCell {
                 root.removeListener(listener);
             }
         } catch (Throwable t) {
-            LOGGER.warn("[rs2ae_cell] persist listener removal failed (ignored)", t);
+            LOGGER.warn("[rs2ae_cell] persist 移除监听失败（已忽略）", t);
         }
     }
 
@@ -298,7 +360,7 @@ public class RSNetworkCellInventory implements StorageCell {
                 root.removeListener(listener);
             }
         } catch (Throwable t) {
-            LOGGER.warn("[rs2ae_cell] detach listener removal failed (ignored)", t);
+            LOGGER.warn("[rs2ae_cell] detach 移除监听失败（已忽略）", t);
         }
         this.listener = null;
         this.network = null;

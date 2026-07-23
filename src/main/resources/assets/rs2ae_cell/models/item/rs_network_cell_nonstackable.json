@@ -1,6 +1,7 @@
 {
-    "parent": "minecraft:item/generated",
-    "textures": {
-        "layer0": "rs2ae_cell:item/rs_network_cell_nonstackable"
-    }
+  "parent": "minecraft:item/generated",
+  "textures": {
+    "layer0": "rs2ae_cell:item/rs_network_cell_nonstackable",
+    "layer1": "rs2ae_cell:item/storage_cell_led"
+  }
 }
