@@ -275,7 +275,10 @@ public class RSNetworkCellInventory implements StorageCell {
         this.host = host;
         this.bound = RSNetworkStorageCellItem.getBoundRsBlock(is);
         this.dimLoc = RSNetworkStorageCellItem.getBoundDimension(is);
-        this.filter = (is.getItem() instanceof RSNetworkStorageCellItem item) ? item.getFilter() : CellFilter.ALL;
+        // 过滤策略按物品栈当前的存入模式动态读取（单磁盘 + NBT 模式切换）：
+        // 「仅不可堆叠」模式 → NON_STACKABLE（读全部、仅不可堆叠可写）；否则 → ALL（读写全部）。
+        this.filter = (is.getItem() instanceof RSNetworkStorageCellItem)
+                ? RSNetworkStorageCellItem.getFilter(is) : CellFilter.ALL;
         // AE2 把驱动器包成 ISaveProvider lambda 传进来；从中反射出驱动器网格节点，供 requestUpdate 推刷新。
         this.gridNode = extractGridNode(host);
         // 预览单元（host==null，非网格上下文，如物品渲染）不参与同网络主单元抢占，也不应成为主单元。

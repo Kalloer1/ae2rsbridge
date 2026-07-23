@@ -1,0 +1,49 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "java",
+      "request": "launch",
+      "name": "Client",
+      "presentation": {
+        "group": "Mod Development - ae2rsbridge",
+        "order": 0
+      },
+      "projectName": "ae2rsbridge",
+      "mainClass": "net.neoforged.devlaunch.Main",
+      "args": [
+        "@D:\\github\\ae-rs\\ae2rsbridge\\build\\moddev\\clientRunProgramArgs.txt"
+      ],
+      "vmArgs": [
+        "@D:\\github\\ae-rs\\ae2rsbridge\\build\\moddev\\clientRunVmArgs.txt",
+        "-Dfml.modFolders\u003drs2ae_cell%%D:\\github\\ae-rs\\ae2rsbridge\\bin\\main"
+      ],
+      "cwd": "${workspaceFolder}\\run",
+      "env": {},
+      "console": "internalConsole",
+      "shortenCommandLine": "none"
+    },
+    {
+      "type": "java",
+      "request": "launch",
+      "name": "Server",
+      "presentation": {
+        "group": "Mod Development - ae2rsbridge",
+        "order": 1
+      },
+      "projectName": "ae2rsbridge",
+      "mainClass": "net.neoforged.devlaunch.Main",
+      "args": [
+        "@D:\\github\\ae-rs\\ae2rsbridge\\build\\moddev\\serverRunProgramArgs.txt"
+      ],
+      "vmArgs": [
+        "@D:\\github\\ae-rs\\ae2rsbridge\\build\\moddev\\serverRunVmArgs.txt",
+        "-Dfml.modFolders\u003drs2ae_cell%%D:\\github\\ae-rs\\ae2rsbridge\\bin\\main"
+      ],
+      "cwd": "${workspaceFolder}\\run",
+      "env": {},
+      "console": "internalConsole",
+      "shortenCommandLine": "none"
+    }
+  ]
+}

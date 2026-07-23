@@ -3,5 +3,11 @@
   "textures": {
     "layer0": "rs2ae_cell:item/rs_network_cell",
     "layer1": "rs2ae_cell:item/storage_cell_led"
-  }
+  },
+  "overrides": [
+    {
+      "predicate": { "custom_model_data": 1 },
+      "model": "rs2ae_cell:item/rs_network_cell_1"
+    }
+  ]
 }

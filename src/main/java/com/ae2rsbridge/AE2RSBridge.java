@@ -1,7 +1,6 @@
 package com.ae2rsbridge;
 
 import appeng.api.storage.StorageCells;
-import com.ae2rsbridge.cell.CellFilter;
 import com.ae2rsbridge.cell.RSNetworkCellHandler;
 import com.ae2rsbridge.cell.RSNetworkCellInventory;
 import com.ae2rsbridge.item.RSNetworkStorageCellItem;
@@ -41,11 +40,7 @@ public class AE2RSBridge {
 
     public static final DeferredHolder<Item, RSNetworkStorageCellItem> RS_NETWORK_CELL_ITEM =
             ITEMS.register("rs_network_cell",
-                    () -> new RSNetworkStorageCellItem(new Item.Properties(), CellFilter.ALL));
-
-    public static final DeferredHolder<Item, RSNetworkStorageCellItem> RS_NETWORK_CELL_NONSTACKABLE_ITEM =
-            ITEMS.register("rs_network_cell_nonstackable",
-                    () -> new RSNetworkStorageCellItem(new Item.Properties(), CellFilter.NON_STACKABLE));
+                    () -> new RSNetworkStorageCellItem(new Item.Properties()));
 
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> CREATIVE_TAB =
             CREATIVE_MODE_TABS.register(MODID, () -> CreativeModeTab.builder()
@@ -53,7 +48,6 @@ public class AE2RSBridge {
                     .icon(() -> new ItemStack(RS_NETWORK_CELL_ITEM.get()))
                     .displayItems((params, output) -> {
                         output.accept(new ItemStack(RS_NETWORK_CELL_ITEM.get()));
-                        output.accept(new ItemStack(RS_NETWORK_CELL_NONSTACKABLE_ITEM.get()));
                     })
                     .build());
 

@@ -13,13 +13,13 @@ logoBlur=false
 description='''
 ${mod_description}
 
-将 Refined Storage 2 网络以 AE2 原生存储单元形式暴露给 AE2 网格。
-- 潜行右键 RS 线缆/控制器把单元绑定到该 RS 网络
-- 把单元放入 ME 驱动器，AE2 终端即可原生读取 RS 网络内容
-- 只读（AE 可浏览/从 RS 提取，不写回 RS）；推模式刷新，空闲零开销
-- 两种单元：
-  ·「RS 网络存储单元」暴露全部类型（RS 不限类型）
-  ·「RS 不可堆叠单元」仅暴露不可堆叠物品，专用于释放 AE 磁盘 63 类型配额
+Exposes a Refined Storage 2 network to Applied Energistics 2 as a native storage cell.
+- Shift-right-click RS cables/controllers to bind the cell to that RS network
+- Place the cell in an ME Drive to allow AE2 terminals to read RS network contents natively
+- Read-only (AE can browse/extract from RS, no write-back); push-mode refresh, zero idle overhead
+- Two cell types:
+  · "RS Network Storage Cell" exposes all types (RS has no type limits)
+  · "RS Non-Stackable Cell" exposes only non-stackable items, specifically to free up AE disk 63-type quota
 '''
 
 [[dependencies.${mod_id}]]
@@ -47,7 +47,7 @@ ${mod_description}
 [[dependencies.${mod_id}]]
     modId="refinedstorage"
     type="required"
-    # Refined Storage 2 (1.21.1) — verify modId + range against RS2 release
+    # Refined Storage 2 (1.21.1) - verify modId + range against RS2 release
     versionRange="[2.0.0,)"
     ordering="AFTER"
     side="BOTH"
