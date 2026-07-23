@@ -5,6 +5,7 @@ import appeng.api.config.Actionable;
 import appeng.api.config.PowerMultiplier;
 import appeng.api.networking.GridHelper;
 import appeng.api.networking.IGrid;
+import appeng.api.networking.IGridNodeListener;
 import appeng.api.networking.IManagedGridNode;
 import appeng.api.networking.energy.IEnergyService;
 import appeng.api.networking.energy.IAEPowerStorage;
@@ -41,6 +42,8 @@ import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.energy.IEnergyStorage;
 
 import org.jetbrains.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.util.EnumSet;
 
 /**
@@ -61,6 +64,8 @@ public class StorageBridgeBlockEntity extends AbstractNetworkNodeContainerBlockE
         IConfigurableObject, IPriorityHost, ISubMenuHost {
 
     private static final double AE_DRAW_RATE = 1000.0;
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(StorageBridgeBlockEntity.class);
 
     private final IManagedGridNode mainNode;
     private final RSNetworkToAEStorage rsToAeStorage;
@@ -139,6 +144,15 @@ public class StorageBridgeBlockEntity extends AbstractNetworkNodeContainerBlockE
     }
 
     @Override
+    public void onMainNodeStateChanged(IGridNodeListener.State state) {
+        // mainNode 加入/离开网格时主动让 AE2 重新读取挂载的 RS 存储，
+        // 避免“RS 网络先连好、AE2 节点后就绪”导致首次读取为空且此后不再刷新。
+        if (mainNode != null && mainNode.isReady()) {
+            IStorageProvider.requestUpdate(mainNode);
+        }
+    }
+
+    @Override
     public void saveChanges() {
         setChanged();
     }
@@ -155,6 +169,8 @@ public class StorageBridgeBlockEntity extends AbstractNetworkNodeContainerBlockE
 
     @Override
     public void mountInventories(IStorageMounts storageMounts) {
+        LOGGER.info("[ae2rsbridge][diag] mountInventories: RS network null? " + (getRSNetwork() == null)
+                + " AE2Access=" + getAE2Access() + " priority=" + getAE2Priority());
         // 将 AE2 侧优先级传递给 AE2 存储系统，否则 RS 桥默认 0 优先级，
         // 永远竞争不过 ME 驱动器/存储总线等。
         storageMounts.mount(rsToAeStorage, getAE2Priority());
@@ -278,6 +294,22 @@ public class StorageBridgeBlockEntity extends AbstractNetworkNodeContainerBlockE
             return;
         }
 
+        // === RS2 节点驱动 ===
+        // 我们继承的是 AbstractNetworkNodeContainerBlockEntity（最简基类），
+        // 没有走 AbstractBaseNetworkNodeContainerBlockEntity + NetworkNodeBlockEntityTicker
+        // 这条标准路线，所以 setActive() 永远没人调、isActive() 永远 false，
+        // 反映到 GUI 上就是"RS 网络未连接"。这里手动驱动：按网络存在性同步 activeness，
+        // 并调用节点的 doWork()（基类能量抽取 + 我们的 detectChanges）让 RS 网络能感知 AE2 库存。
+        if (mainNetworkNode != null) {
+            boolean networkPresent = mainNetworkNode.getNetwork() != null;
+            if (mainNetworkNode.isActive() != networkPresent) {
+                mainNetworkNode.setActive(networkPresent);
+            }
+            if (networkPresent) {
+                mainNetworkNode.doWork();
+            }
+        }
+
         energyBridge.resetTickExtract();
         drawEnergyFromAE2();
         if (energyBridge.isActiveOutput()) {
@@ -339,11 +371,14 @@ public class StorageBridgeBlockEntity extends AbstractNetworkNodeContainerBlockE
         if (level == null || level.isClientSide()) {
             return;
         }
-        int energyToPush = energyBridge.getFECurrentPower();
+        int maxPushPerTick = com.ae2rsbridge.config.BridgeConfig.getEnergyOutputRateFEPerTick();
+        if (maxPushPerTick <= 0) {
+            return; // 配置为 0 关闭主动输出
+        }
+        int energyToPush = Math.min(energyBridge.getFECurrentPower(), maxPushPerTick);
         if (energyToPush <= 0) {
             return;
         }
-        energyToPush = Math.min(energyToPush, 2000);
         int totalPushed = 0;
 
         for (Direction dir : Direction.values()) {
@@ -370,6 +405,8 @@ public class StorageBridgeBlockEntity extends AbstractNetworkNodeContainerBlockE
     public void clearRemoved() {
         super.clearRemoved();
         // 基类已初始化 RS2 容器（注册 RS 节点）；这里再安排 AE2 网格节点创建。
+        LOGGER.info("[ae2rsbridge][diag] clearRemoved() at " + worldPosition
+                + " levelSet=" + (level != null) + " isClient=" + (level != null && level.isClientSide()));
         GridHelper.onFirstTick(this, StorageBridgeBlockEntity::onFirstTick);
     }
 
@@ -379,6 +416,8 @@ public class StorageBridgeBlockEntity extends AbstractNetworkNodeContainerBlockE
         }
         if (!be.mainNode.isReady()) {
             be.mainNode.create(be.level, be.worldPosition);
+            LOGGER.info("[ae2rsbridge][diag] onFirstTick: mainNode.create() called, isReady="
+                    + be.mainNode.isReady());
         }
         be.wasRSConnected = be.isRSConnected();
     }

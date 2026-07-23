@@ -15,6 +15,8 @@ public class BridgeConfig {
     public static final ModConfigSpec.DoubleValue MAX_TRANSFER_PER_TICK;
     public static final ModConfigSpec.IntValue BRIDGE_PRIORITY;
     public static final ModConfigSpec.IntValue SYNC_INTERVAL;
+    /** 桥每 tick 向相邻机器推送 FE 的最大速率（FE/tick）。设 0 关闭主动输出。 */
+    public static final ModConfigSpec.IntValue ENERGY_OUTPUT_RATE;
 
     public static final ModConfigSpec SPEC;
 
@@ -46,6 +48,11 @@ public class BridgeConfig {
                 .comment("AE2 与 RS 之间的同步间隔（ticks，默认 10）")
                 .defineInRange("syncInterval", 10, 1, Integer.MAX_VALUE);
 
+        // 主动向相邻机器输出 FE 的速率（FE/tick，0 表示关闭）
+        ENERGY_OUTPUT_RATE = BUILDER
+                .comment("桥每 tick 向相邻机器推送 FE 能量上限（FE/tick，默认 2000，0 表示关闭主动输出）")
+                .defineInRange("energyOutputRateFEPerTick", 2000, 0, Integer.MAX_VALUE);
+
         BUILDER.pop();
         SPEC = BUILDER.build();
     }
@@ -73,5 +80,10 @@ public class BridgeConfig {
     /** 获取同步间隔（ticks） */
     public static int getSyncInterval() {
         return SYNC_INTERVAL.get();
+    }
+
+    /** 获取 FE 主动输出速率（FE/tick，0 表示关闭） */
+    public static int getEnergyOutputRateFEPerTick() {
+        return ENERGY_OUTPUT_RATE.get();
     }
 }

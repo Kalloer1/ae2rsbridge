@@ -23,8 +23,12 @@ import net.minecraft.world.phys.BlockHitResult;
 
 import com.mojang.serialization.MapCodec;
 import org.jetbrains.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class StorageBridgeBlock extends BaseEntityBlock {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(StorageBridgeBlock.class);
 
     public StorageBridgeBlock(BlockBehaviour.Properties properties) {
         super(properties);
@@ -60,6 +64,8 @@ public class StorageBridgeBlock extends BaseEntityBlock {
         if (!level.isClientSide() && player instanceof ServerPlayer serverPlayer) {
             BlockEntity be = level.getBlockEntity(pos);
             if (be instanceof StorageBridgeBlockEntity bridgeBE) {
+                LOGGER.info("[ae2rsbridge][diag] useWithoutItem (right-click) on bridge at " + pos
+                        + " ae2Ready=" + bridgeBE.isAE2Connected() + " rsActive=" + bridgeBE.isRSConnected());
                 openMainMenu(serverPlayer, bridgeBE);
             }
         }

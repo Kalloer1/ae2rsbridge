@@ -20,6 +20,8 @@ import com.refinedmods.refinedstorage.api.storage.root.RootStorage;
 import com.refinedmods.refinedstorage.common.support.resource.FluidResource;
 import com.refinedmods.refinedstorage.common.support.resource.ItemResource;
 import net.minecraft.network.chat.Component;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * RS2 网络 → AE2 网络的存储（挂载到 AE2 网格的 MEStorage）。
@@ -35,6 +37,10 @@ import net.minecraft.network.chat.Component;
  * 只是现在合并到单一的 provider 快照里。
  */
 public class RSNetworkToAEStorage implements MEStorage {
+
+    private static long LAST_DIAG = 0;
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(RSNetworkToAEStorage.class);
 
     private final StorageBridgeBlockEntity bridge;
 
@@ -136,15 +142,19 @@ public class RSNetworkToAEStorage implements MEStorage {
     public void getAvailableStacks(KeyCounter out) {
         // 访问模式限制：无读取权限时不暴露 RS 存储内容给 AE2
         if (!bridge.getAE2Access().isAllowExtraction()) {
+            if (throttle()) LOGGER.info("[ae2rsbridge][diag] getAvailableStacks: ACCESS disallows extraction");
             return;
         }
 
         Network network = getRSNetwork();
         if (network == null) {
+            if (throttle()) LOGGER.info("[ae2rsbridge][diag] getAvailableStacks: RS network is NULL "
+                    + "(bridge not connected to RS cable / RS controller not powered / RS node inactive)");
             return;
         }
         RootStorage root = network.getComponent(StorageNetworkComponent.class);
         if (root == null) {
+            if (throttle()) LOGGER.info("[ae2rsbridge][diag] getAvailableStacks: StorageNetworkComponent NULL");
             return;
         }
 
@@ -156,6 +166,7 @@ public class RSNetworkToAEStorage implements MEStorage {
         try {
             // 计算 AE2 已上报给 RS 的快照（含 RS 镜像回来的 AE 物品），用于扣除，避免翻倍。
             KeyCounter ae2ReportedToRS = bridge.getAE2NetworkToRSStorage().getReportedToRS();
+            int addedToAE = 0;
 
             for (ResourceAmount ra : root.getAll()) {
                 ResourceKey resource = ra.resource();
@@ -172,6 +183,7 @@ public class RSNetworkToAEStorage implements MEStorage {
                     long netAmount = rsAmount - ae2Amount;
                     if (netAmount > 0) {
                         out.add(aeKey, netAmount);
+                        addedToAE++;
                     }
                 } else if (resource instanceof FluidResource fluidResource) {
                     AEFluidKey aeKey = KeyConverter.toAEFluidKey(fluidResource);
@@ -182,12 +194,28 @@ public class RSNetworkToAEStorage implements MEStorage {
                     long netAmount = rsAmount - ae2Amount;
                     if (netAmount > 0) {
                         out.add(aeKey, netAmount);
+                        addedToAE++;
                     }
                 }
+            }
+            if (throttle()) {
+                LOGGER.info("[ae2rsbridge][diag] getAvailableStacks: RS root total="
+                        + root.getAll().size() + " reportedToRS=" + ae2ReportedToRS.size()
+                        + " exposedToAE=" + addedToAE);
             }
         } finally {
             BridgeTransactionGuard.end();
         }
+    }
+
+    /** 限流：同一类诊断最多每 2 秒打印一次，避免刷屏但保证运行时持续可见。 */
+    private static boolean throttle() {
+        long now = System.currentTimeMillis();
+        if (now - LAST_DIAG >= 2000) {
+            LAST_DIAG = now;
+            return true;
+        }
+        return false;
     }
 
     @Override

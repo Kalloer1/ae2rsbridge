@@ -8,10 +8,12 @@ import appeng.client.gui.style.ScreenStyle;
 import appeng.client.gui.widgets.ServerSettingToggleButton;
 import appeng.client.gui.widgets.TabButton;
 import appeng.client.gui.widgets.ToggleButton;
+import appeng.menu.slot.AppEngSlot;
 import com.ae2rsbridge.menu.StorageBridgeMenu;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.inventory.Slot;
 
 /**
  * 存储桥接方块的主界面，采用 AE2 的 {@link AEBaseScreen} 框架：
@@ -80,6 +82,28 @@ public class StorageBridgeScreen extends AEBaseScreen<StorageBridgeMenu> {
         this.accessButton.set(getMenu().getAE2Access());
         this.outputButton.setState(getMenu().isActiveOutput());
         this.stackableFilterButton.setState(getMenu().isNonStackableOnly());
+    }
+
+    /**
+     * 补画玩家背包槽位的背景。
+     * <p>
+     * AE2 的 {@link AEBaseScreen#renderSlot} 只在槽位是 {@link AppEngSlot} 时才画
+     * {@link Icon#SLOT_BACKGROUND}；而玩家背包走的是 AE2 的 {@code createPlayerInventorySlots}，
+     * 该方法被 {@code final} 修饰且内部用 {@code new Slot(...)}（vanilla {@link Slot}），
+     * 因此 AE2 默认不会给玩家背包画格子背景。{@code generatedBackground} 又只是外框，
+     * 不会画内部每格——结果就是"物品栏"区域一片纯色、没有分割线。
+     * <p>
+     * 这里在调用 {@code super.renderSlot} 之前，对所有非 {@link AppEngSlot} 的槽位补画一次
+     * {@code SLOT_BACKGROUND}，即可恢复标准的格子外观，与 AE2 自家屏幕的 AppEngSlot 一致。
+     */
+    @Override
+    public void renderSlot(GuiGraphics guiGraphics, Slot slot) {
+        if (!(slot instanceof AppEngSlot)) {
+            Icon.SLOT_BACKGROUND.getBlitter()
+                    .dest(slot.x, slot.y)
+                    .blit(guiGraphics);
+        }
+        super.renderSlot(guiGraphics, slot);
     }
 
     @Override
