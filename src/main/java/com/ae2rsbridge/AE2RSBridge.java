@@ -25,7 +25,7 @@ import org.slf4j.LoggerFactory;
 @Mod(AE2RSBridge.MODID)
 public class AE2RSBridge {
 
-    public static final String MODID = "rs2ae-cell";
+    public static final String MODID = "rs2ae_cell";
 
     private static final Logger LOGGER = LoggerFactory.getLogger(AE2RSBridge.class);
 
@@ -45,7 +45,7 @@ public class AE2RSBridge {
 
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> CREATIVE_TAB =
             CREATIVE_MODE_TABS.register(MODID, () -> CreativeModeTab.builder()
-                    .title(Component.translatable("itemGroup.rs2ae-cell"))
+                    .title(Component.translatable("itemGroup.rs2ae_cell"))
                     .icon(() -> new ItemStack(RS_NETWORK_CELL_ITEM.get()))
                     .displayItems((params, output) -> {
                         output.accept(new ItemStack(RS_NETWORK_CELL_ITEM.get()));
@@ -54,7 +54,7 @@ public class AE2RSBridge {
                     .build());
 
     public AE2RSBridge(IEventBus modEventBus, ModContainer container) {
-        LOGGER.info("[rs2ae-cell] RS Network Cell mod constructing (RS2 -> AE2 native cell).");
+        LOGGER.info("[rs2ae_cell] RS Network Cell mod constructing (RS2 -> AE2 native cell).");
         ITEMS.register(modEventBus);
         CREATIVE_MODE_TABS.register(modEventBus);
         modEventBus.addListener(this::commonSetup);
@@ -62,6 +62,6 @@ public class AE2RSBridge {
 
     private void commonSetup(FMLCommonSetupEvent event) {
         StorageCells.addCellHandler(new RSNetworkCellHandler());
-        LOGGER.info("[rs2ae-cell] registered RSNetworkCellHandler with AE2 StorageCells.");
+        LOGGER.info("[rs2ae_cell] registered RSNetworkCellHandler with AE2 StorageCells.");
     }
 }

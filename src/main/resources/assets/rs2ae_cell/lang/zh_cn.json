@@ -1,0 +1,5 @@
+{
+    "item.rs2ae_cell.rs_network_cell": "RS 网络存储单元",
+    "item.rs2ae_cell.rs_network_cell_nonstackable": "RS 不可堆叠单元",
+    "itemGroup.rs2ae_cell": "RS 网络单元"
+}

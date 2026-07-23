@@ -83,7 +83,7 @@ public class RSNetworkStorageCellItem extends Item {
             setBoundRsBlock(held, clicked);
             player.sendSystemMessage(Component.literal(
                     "[RS Network Cell] 已绑定到 RS 网络方块 " + clicked.toShortString()));
-            LOGGER.info("[rs2ae-cell] cell bound to RS network block at " + clicked);
+            LOGGER.info("[rs2ae_cell] cell bound to RS network block at " + clicked);
             return InteractionResult.SUCCESS;
         }
         return InteractionResult.PASS;

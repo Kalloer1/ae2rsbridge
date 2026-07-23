@@ -1,6 +1,6 @@
 {
     "parent": "minecraft:item/generated",
     "textures": {
-        "layer0": "rs2ae-cell:item/rs_network_cell_nonstackable"
+        "layer0": "rs2ae_cell:item/rs_network_cell_nonstackable"
     }
 }
