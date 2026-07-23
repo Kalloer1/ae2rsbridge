@@ -357,33 +357,30 @@ public class RSNetworkCellInventory implements StorageCell {
 
     private void rebuild() {
         try {
-            if (root == null) {
+            RootStorage r = getRoot();
+            if (r == null) {
                 // RS 网络尚未解析（单元放入时 RS 未上线，或绑定方块暂未联网）：重试解析。
                 MinecraftServer srv = ServerLifecycleHooks.getCurrentServer();
                 if (srv != null) {
                     resolveNetwork(srv);
                 }
+                r = getRoot();
             }
             cache = new KeyCounter();
-            if (root == null) {
+            if (r == null) {
                 // 仍无网络：保持 dirty 以便 AE2 下次查询时继续重试，直到 RS 上线。
                 dirty = true;
                 return;
             }
-            for (ResourceAmount ra : root.getAll()) {
-                try {
-                    com.refinedmods.refinedstorage.api.resource.ResourceKey resource = ra.resource();
-                    long amount = ra.amount();
-                    if (amount <= 0) {
-                        continue;
-                    }
-                    AEKey aeKey = KeyConverter.toAEKey(resource);
-                    if (aeKey != null && filter.test(aeKey)) {
-                        cache.add(aeKey, amount);
-                    }
-                } catch (RuntimeException e) {
-                    // 单条资源转换失败（罕见 RS 资源类型）跳过，绝不影响整体。
-                    LOGGER.warn("[rs2ae_cell] rebuild 时跳过某条 RS 资源", e);
+            try {
+                addAllToCache(r);
+            } catch (Throwable cme) {
+                // RS 重建期间 getAll 可能抛 ConcurrentModificationException：用最新 RS 状态重试一次。
+                LOGGER.warn("[rs2ae_cell] rebuild 首次 getAll 异常，用最新 RS 状态重试一次", cme);
+                RootStorage r2 = getRoot();
+                if (r2 != null) {
+                    cache = new KeyCounter();
+                    addAllToCache(r2);
                 }
             }
             dirty = false;
@@ -394,6 +391,25 @@ public class RSNetworkCellInventory implements StorageCell {
             LOGGER.error("[rs2ae_cell] rebuild 失败；单元降级为空直到 RS 恢复", t);
             cache = new KeyCounter();
             dirty = true; // 保持 dirty，稍后重试
+        }
+    }
+
+    private void addAllToCache(RootStorage r) {
+        for (ResourceAmount ra : r.getAll()) {
+            try {
+                com.refinedmods.refinedstorage.api.resource.ResourceKey resource = ra.resource();
+                long amount = ra.amount();
+                if (amount <= 0) {
+                    continue;
+                }
+                AEKey aeKey = KeyConverter.toAEKey(resource);
+                if (aeKey != null && filter.test(aeKey)) {
+                    cache.add(aeKey, amount);
+                }
+            } catch (RuntimeException e) {
+                // 单条资源转换失败（罕见 RS 资源类型）跳过，绝不影响整体。
+                LOGGER.warn("[rs2ae_cell] rebuild 时跳过某条 RS 资源", e);
+            }
         }
     }
 
@@ -415,24 +431,87 @@ public class RSNetworkCellInventory implements StorageCell {
         }
     }
 
+    /**
+     * 取得当前 RS 存储组件（RootStorage）。
+     * <p>
+     * 每次实时从 {@code network} 取，绝不使用过期实例——RS 重建网络存储时会换一个<b>新</b>的
+     * {@code RootStorage} 实例；若仍持有旧实例，其 {@code extractSources} 正在被回收，
+     * 在它上面调用 {@code extract/insert/getAll} 极易触发 {@code CompositeStorageImpl.extract} 的
+     * {@link java.util.ConcurrentModificationException}（这正是 ME IO 端口批量导入时丢物品的元凶）。
+     * 若取到的新实例与已注册监听的实例不同，自动把监听迁移过去，保证刷新不失效。
+     */
+    @Nullable
+    private RootStorage getRoot() {
+        if (network == null) {
+            return null;
+        }
+        RootStorage r;
+        try {
+            r = network.getComponent(StorageNetworkComponent.class);
+        } catch (Throwable t) {
+            LOGGER.warn("[rs2ae_cell] getComponent(StorageNetworkComponent) 失败（已忽略）", t);
+            return null;
+        }
+        if (r != null && r != this.root) {
+            try {
+                if (this.root != null && this.listener != null) {
+                    this.root.removeListener(this.listener);
+                }
+            } catch (Throwable ignore) {
+                // 旧实例可能正在被回收，忽略移除失败
+            }
+            this.root = r;
+            registerListener();
+        }
+        return r;
+    }
+
     @Override
     public long insert(AEKey key, long amount, Actionable mode, IActionSource source) {
         // 单向桥接：AE 经此单元把物品写入 RS 网络。
-        if (amount <= 0 || key == null || root == null || !filter.test(key)) {
+        if (amount <= 0 || key == null || !filter.test(key)) {
             return 0;
         }
         com.refinedmods.refinedstorage.api.resource.ResourceKey rsKey = KeyConverter.toRSKey(key);
         if (rsKey == null) {
             return 0;
         }
-        int size = (int) Math.min(amount, Integer.MAX_VALUE);
-        try {
-            long inserted = root.insert(rsKey, size,
-                    mode == Actionable.MODULATE ? Action.EXECUTE : Action.SIMULATE, AE_ACTOR);
-            if (mode == Actionable.MODULATE && inserted > 0) {
-                markDirtyAndNotify();
+        // 只读查询（SIMULATE）：不修改 RS，绝不会触发 CME，直接走。
+        if (mode != Actionable.MODULATE) {
+            try {
+                RootStorage r = getRoot();
+                if (r == null) {
+                    return 0;
+                }
+                return r.insert(rsKey, (int) Math.min(amount, Integer.MAX_VALUE), Action.SIMULATE, AE_ACTOR);
+            } catch (Throwable t) {
+                LOGGER.error("[rs2ae_cell] insert(SIMULATE) 失败；返回 0", t);
+                return 0;
             }
-            return inserted;
+        }
+        // 真实写入（MODULATE）：RS 的 CompositeStorageImpl 在删除/新增物品后做内部簿记时（line 112）会抛
+        // ConcurrentModificationException，而物品在异常抛出前已写入 RS。若直接 try/catch 返回 0，会导致
+        // 「RS 已收到物品、AE 却以为没写入」→ AE 不扣减自身库存 → <b>重复计数</b>。
+        // 正确做法：先用 SIMULATE 探明可写入量 sim，再 EXECUTE；无论成功还是抛 CME 都按 sim 上报
+        // （物品确实已进入 RS），AE 据此扣减、RS 据此增加 → 不重复。
+        try {
+            RootStorage r = getRoot();
+            if (r == null) {
+                return 0;
+            }
+            int size = (int) Math.min(amount, Integer.MAX_VALUE);
+            long sim = r.insert(rsKey, size, Action.SIMULATE, AE_ACTOR);
+            if (sim <= 0) {
+                return 0;
+            }
+            try {
+                r.insert(rsKey, (int) sim, Action.EXECUTE, AE_ACTOR);
+            } catch (Throwable t) {
+                LOGGER.warn("[rs2ae_cell] insert(EXECUTE) 触发 RS 内部 ConcurrentModificationException；"
+                        + "按已写入量 {} 上报（物品已写入 RS，未重复）", sim);
+            }
+            markDirtyAndNotify();
+            return sim;
         } catch (Throwable t) {
             LOGGER.error("[rs2ae_cell] insert 失败；返回 0", t);
             return 0;
@@ -441,21 +520,49 @@ public class RSNetworkCellInventory implements StorageCell {
 
     @Override
     public long extract(AEKey key, long amount, Actionable mode, IActionSource source) {
-        if (amount <= 0 || key == null || root == null || !filter.test(key)) {
+        if (amount <= 0 || key == null || !filter.test(key)) {
             return 0;
         }
         com.refinedmods.refinedstorage.api.resource.ResourceKey rsKey = KeyConverter.toRSKey(key);
         if (rsKey == null) {
             return 0;
         }
-        int size = (int) Math.min(amount, Integer.MAX_VALUE);
-        try {
-            long extracted = root.extract(rsKey, size,
-                    mode == Actionable.MODULATE ? Action.EXECUTE : Action.SIMULATE, AE_ACTOR);
-            if (mode == Actionable.MODULATE && extracted > 0) {
-                markDirtyAndNotify();
+        // 只读查询（SIMULATE）：不修改 RS，绝不会触发 CME，直接走。
+        if (mode != Actionable.MODULATE) {
+            try {
+                RootStorage r = getRoot();
+                if (r == null) {
+                    return 0;
+                }
+                return r.extract(rsKey, (int) Math.min(amount, Integer.MAX_VALUE), Action.SIMULATE, AE_ACTOR);
+            } catch (Throwable t) {
+                LOGGER.error("[rs2ae_cell] extract(SIMULATE) 失败；返回 0", t);
+                return 0;
             }
-            return extracted;
+        }
+        // 真实删除（MODULATE）：RS 的 CompositeStorageImpl.extract 在删除物品、做内部簿记时（line 112）
+        // 会抛 ConcurrentModificationException——而物品在异常抛出前已被删除。若这里直接 try/catch 返回 0，
+        // 会导致「RS 物品已消失、AE 却以为没拿到」的<b>凭空丢失</b>（ME IO 端口批量导入 RS→AE 时正是此症状）。
+        // 正确做法：先用 SIMULATE 探明可提取量 sim，再 EXECUTE；无论 EXECUTE 成功还是抛 CME，
+        // 都按 sim 上报（物品确实已离开 RS），AE 据此入账 → 不丢物品。
+        try {
+            RootStorage r = getRoot();
+            if (r == null) {
+                return 0;
+            }
+            int size = (int) Math.min(amount, Integer.MAX_VALUE);
+            long sim = r.extract(rsKey, size, Action.SIMULATE, AE_ACTOR);
+            if (sim <= 0) {
+                return 0;
+            }
+            try {
+                r.extract(rsKey, (int) sim, Action.EXECUTE, AE_ACTOR);
+            } catch (Throwable t) {
+                LOGGER.warn("[rs2ae_cell] extract(EXECUTE) 触发 RS 内部 ConcurrentModificationException；"
+                        + "按已提取量 {} 上报（物品已离开 RS，未丢失）", sim);
+            }
+            markDirtyAndNotify();
+            return sim;
         } catch (Throwable t) {
             LOGGER.error("[rs2ae_cell] extract 失败；返回 0", t);
             return 0;
