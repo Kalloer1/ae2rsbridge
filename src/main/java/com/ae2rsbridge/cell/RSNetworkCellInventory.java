@@ -69,8 +69,6 @@ public class RSNetworkCellInventory implements StorageCell {
     }
 
     private void resolveNetwork() {
-        this.network = null;
-        this.root = null;
         if (level == null || bound == null || level.isClientSide()) {
             return;
         }
@@ -83,20 +81,35 @@ public class RSNetworkCellInventory implements StorageCell {
         if (provider == null) {
             return;
         }
+        Network net = null;
         for (NetworkNodeContainer container : provider.getContainers()) {
             NetworkNode node = container.getNode();
             if (node != null) {
-                Network net = node.getNetwork();
-                if (net != null) {
-                    this.network = net;
+                Network n = node.getNetwork();
+                if (n != null) {
+                    net = n;
                     break;
                 }
             }
         }
-        if (this.network != null) {
-            this.root = this.network.getComponent(StorageNetworkComponent.class);
-            registerListener();
+        if (net == null) {
+            // RS 当前未接入网络：若之前有绑定，先清理旧监听，避免泄漏；root 保持 null 等下次重试。
+            if (this.network != null) {
+                detach();
+            }
+            return;
         }
+        if (net == this.network) {
+            // 同一网络，监听已注册，无需重复。
+            return;
+        }
+        // 网络变了（或首次解析）：清理旧绑定后重新登记监听。
+        if (this.network != null) {
+            detach();
+        }
+        this.network = net;
+        this.root = this.network.getComponent(StorageNetworkComponent.class);
+        registerListener();
     }
 
     private void registerListener() {
@@ -128,8 +141,14 @@ public class RSNetworkCellInventory implements StorageCell {
     }
 
     private void rebuild() {
+        if (root == null) {
+            // RS 网络尚未解析（单元放入时 RS 未上线，或绑定方块暂未联网）：重试解析。
+            resolveNetwork();
+        }
         cache = new KeyCounter();
         if (root == null) {
+            // 仍无网络：保持 dirty 以便 AE2 下次查询时继续重试，直到 RS 上线。
+            dirty = true;
             return;
         }
         for (ResourceAmount ra : root.getAll()) {
