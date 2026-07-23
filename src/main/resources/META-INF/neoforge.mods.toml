@@ -1,5 +1,6 @@
 modLoader="javafml"
 loaderVersion="${loader_version_range}"
+license="${mod_license}"
 issueTrackerURL="https://github.com/Kalloer1/ae2rsbridge/issues"
 
 [[mods]]
@@ -7,7 +8,6 @@ modId="${mod_id}"
 version="${mod_version}"
 displayName="${mod_name}"
 authors="${mod_authors}"
-license="${mod_license}"
 logoFile="icon.png"
 logoBlur=false
 description='''
