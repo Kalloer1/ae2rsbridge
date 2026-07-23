@@ -20,6 +20,10 @@ public class RSNetworkCellHandler implements ICellHandler {
 
     @Override
     public StorageCell getCellInventory(ItemStack is, @Nullable ISaveProvider host) {
+        // 未绑定的单元完全惰性：不注册为存储源，绝不干扰 AE 网络。
+        if (RSNetworkStorageCellItem.getBoundRsBlock(is) == null) {
+            return null;
+        }
         return new RSNetworkCellInventory(is, host);
     }
 
