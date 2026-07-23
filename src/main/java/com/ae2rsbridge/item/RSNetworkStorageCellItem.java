@@ -129,5 +129,7 @@ public class RSNetworkStorageCellItem extends Item {
             tooltip.add(Component.literal("放入 ME 驱动器即可让 AE2 读取并写入 RS（单向桥接：仅 AE 访问 RS）")
                     .withStyle(ChatFormatting.DARK_GRAY));
         }
+        tooltip.add(Component.literal("提示：同一 RS 网络只需绑定一个单元；若多个单元绑同一网络，仅第一个生效，其余自动闲置")
+                .withStyle(ChatFormatting.GRAY));
     }
 }

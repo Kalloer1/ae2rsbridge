@@ -44,6 +44,7 @@ import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Map;
 import java.util.WeakHashMap;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 把 RS 网络以 AE2 原生存储单元（{@link StorageCell}）形式暴露给 AE2 网格 —— <b>单向桥接</b>。
@@ -109,10 +110,60 @@ public class RSNetworkCellInventory implements StorageCell {
     private static final int RETRY_INTERVAL_TICKS = 20; // ~1s @ 20TPS
     private static int tickCounter = 0;
 
+    /**
+     * 同网络单主单元表：避免<b>两个单元绑定同一个 RS 网络</b>时被 AE2 当成两个独立存储源，
+     * 从而把同一份 RS 内容重复计入（幻影数量 / 重复计数 / 提取错乱）——这正是「两个单元绑同网络放进驱动器」的严重 bug。
+     * <p>
+     * 以 (维度 + 方块坐标) 为键，记录当前<b>唯一生效</b>的主单元（primary）。只有主单元向 AE2 暴露 RS 内容；
+     * 同一网络上的其余单元进入「闲置 (inert)」：不读取、不写入、不注册监听，仅打日志 + tooltip 提示。
+     * <p>
+     * 键由绑定数据 (dim + blockpos) 构成，与 AE2 的 host 无关；用 {@link WeakReference} 持有主单元，
+     * 主单元被驱动器卸载并 GC 后条目自动失效，另一个同网络单元可在下次重试时接管，无需玩家重插拔。
+     * host==null 的预览单元（物品渲染 / 创造栏等非网格上下文）不参与抢占，避免它们抢走主单元导致真正装入驱动器的单元失效。
+     */
+    private static final Map<NetworkKey, WeakReference<RSNetworkCellInventory>> PRIMARY =
+            new ConcurrentHashMap<>();
+
+    /** 同网络单主表的键：(维度, 方块坐标)。 */
+    private static final class NetworkKey {
+        final ResourceLocation dim;
+        final long pos;
+
+        NetworkKey(ResourceLocation dim, long pos) {
+            this.dim = dim;
+            this.pos = pos;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof NetworkKey other)) {
+                return false;
+            }
+            return pos == other.pos && dim.equals(other.dim);
+        }
+
+        @Override
+        public int hashCode() {
+            return 31 * dim.hashCode() + Long.hashCode(pos);
+        }
+
+        @Override
+        public String toString() {
+            return dim + "@" + pos;
+        }
+    }
+
     /** 由 {@link com.ae2rsbridge.AE2RSBridge} 在服务端刻事件（{@code ServerTickEvent.Post}）中调用。 */
     public static void tickPending(MinecraftServer server) {
         if (++tickCounter % RETRY_INTERVAL_TICKS != 0) {
             return;
+        }
+        // 清理同网络主表中已 GC 的失效条目，避免静态映射无限增长。
+        synchronized (PRIMARY) {
+            PRIMARY.entrySet().removeIf(e -> e.getValue().get() == null);
         }
         // 1) 重试尚未解析出 RS 网络的单元（自愈）。
         if (!PENDING.isEmpty()) {
@@ -144,7 +195,54 @@ public class RSNetworkCellInventory implements StorageCell {
     private void registerPending() {
         if (!PENDING.containsKey(this)) {
             PENDING.put(this, Boolean.TRUE);
-            LOGGER.info("[rs2ae_cell] 单元已加入待解析队列（RS 未就绪），服务端将每秒重试直到 RS 可达");
+            LOGGER.info("[rs2ae_cell] 单元已加入待解析队列（RS 未就绪 / 待抢占同网络主单元），服务端将每秒重试");
+        }
+    }
+
+    /**
+     * 在同网络单主表中抢占本单元所在 RS 网络的主单元身份（仅 {@code host!=null} 的网格内单元参与）。
+     * <ul>
+     *   <li>网络空闲 → 本单元成为 primary，正常暴露内容。</li>
+     *   <li>网络已被另一存活单元占用 → 本单元进入 <b>inert</b>：不读不写不监听，避免 AE2 把同一 RS 内容重复计入。</li>
+     *   <li>原记录指向已 GC 的主单元 → 视为空闲，本单元接管。</li>
+     * </ul>
+     * 预览单元（host==null）不会调用本方法。
+     */
+    private void tryClaim() {
+        if (bound == null || dimLoc == null) {
+            return;
+        }
+        NetworkKey key = new NetworkKey(dimLoc, bound.asLong());
+        synchronized (PRIMARY) {
+            WeakReference<RSNetworkCellInventory> ref = PRIMARY.get(key);
+            RSNetworkCellInventory prim = (ref == null) ? null : ref.get();
+            if (prim == null) {
+                PRIMARY.put(key, new WeakReference<>(this));
+                this.isPrimary = true;
+                this.isInert = false;
+            } else if (prim == this) {
+                this.isPrimary = true;
+                this.isInert = false;
+            } else {
+                this.isPrimary = false;
+                this.isInert = true;
+                LOGGER.warn("[rs2ae_cell] 单元绑定的 RS 网络 {} 已被另一个单元占用"
+                        + "（同一 RS 网络只能有一个单元生效，防重复计入）；本单元进入闲置状态", key);
+            }
+        }
+    }
+
+    /** 单元从驱动器卸载时释放主单元身份，使同网络的其它单元可接管。 */
+    private void releaseClaim() {
+        if (bound == null || dimLoc == null) {
+            return;
+        }
+        NetworkKey key = new NetworkKey(dimLoc, bound.asLong());
+        synchronized (PRIMARY) {
+            WeakReference<RSNetworkCellInventory> ref = PRIMARY.get(key);
+            if (ref != null && ref.get() == this) {
+                PRIMARY.remove(key);
+            }
         }
     }
 
@@ -162,6 +260,17 @@ public class RSNetworkCellInventory implements StorageCell {
     private final CellFilter filter;
     private boolean dirty = true;
 
+    /**
+     * 是否「预览单元」：AE2 在非网格上下文（物品渲染 / 创造栏 / tooltip）也会调用
+     * {@code getCellInventory(is, host)}，此时 host 为 null。这类单元不加入网格，
+     * 也不参与同网络主单元抢占（否则会抢走真正装入驱动器的单元的主身份）。它们仍照常读取 RS 供渲染。
+     */
+    private final boolean isPreview;
+    /** 是否当前网络唯一生效的主单元（向 AE2 暴露内容、注册监听）。 */
+    private boolean isPrimary = false;
+    /** 是否闲置：欲抢占但同网络已被另一主单元占用。闲置单元不读不写不监听，避免 AE2 双计数。 */
+    private boolean isInert = false;
+
     public RSNetworkCellInventory(ItemStack is, @Nullable ISaveProvider host) {
         this.host = host;
         this.bound = RSNetworkStorageCellItem.getBoundRsBlock(is);
@@ -169,15 +278,23 @@ public class RSNetworkCellInventory implements StorageCell {
         this.filter = (is.getItem() instanceof RSNetworkStorageCellItem item) ? item.getFilter() : CellFilter.ALL;
         // AE2 把驱动器包成 ISaveProvider lambda 传进来；从中反射出驱动器网格节点，供 requestUpdate 推刷新。
         this.gridNode = extractGridNode(host);
-        LOGGER.info("[rs2ae_cell] cell constructed; bound={}, dim={}, host={}, gridNode={}",
+        // 预览单元（host==null，非网格上下文，如物品渲染）不参与同网络主单元抢占，也不应成为主单元。
+        this.isPreview = (host == null);
+        if (!isPreview) {
+            tryClaim();
+        }
+        LOGGER.info("[rs2ae_cell] cell constructed; bound={}, dim={}, host={}, gridNode={}, primary={}, inert={}",
                 bound, dimLoc, host != null ? host.getClass().getSimpleName() : "null",
-                gridNode != null ? "ok" : "null");
+                gridNode != null ? "ok" : "null", isPrimary, isInert);
         // 立刻尝试解析（若在服务端线程且维度已加载）；否则入队由 tick 重试。
         MinecraftServer server = ServerLifecycleHooks.getCurrentServer();
         if (server != null) {
             resolveNetwork(server);
         }
-        if (root == null) {
+        if (isInert) {
+            // 同网络已被占用：保持入队，由服务端刻重试抢占（原主单元卸载后本单元可接管）。
+            registerPending();
+        } else if (root == null) {
             // RS 尚未可达：加入待解析队列，由服务端刻轮询重试，一旦 RS 上线即自动接入，无需玩家重新插拔单元。
             registerPending();
         }
@@ -212,6 +329,15 @@ public class RSNetworkCellInventory implements StorageCell {
 
     private void resolveNetwork(@Nullable MinecraftServer server) {
         try {
+            // 每次解析都重新尝试抢占：若原主单元已卸载 GC，闲置单元可在此接管并成为主单元。
+            if (!isPreview) {
+                tryClaim();
+            }
+            if (isInert) {
+                // 同网络仍被占用：保持入队，等原主单元卸载后再接管。本单元不连接 RS、不注册监听。
+                registerPending();
+                return;
+            }
             if (bound == null) {
                 LOGGER.warn("[rs2ae_cell] resolveNetwork: 未绑定 RS 网络方块，无法解析");
                 return;
@@ -403,7 +529,7 @@ public class RSNetworkCellInventory implements StorageCell {
                     continue;
                 }
                 AEKey aeKey = KeyConverter.toAEKey(resource);
-                if (aeKey != null && filter.test(aeKey)) {
+                if (aeKey != null && filter.allowsRead(aeKey)) {
                     cache.add(aeKey, amount);
                 }
             } catch (RuntimeException e) {
@@ -416,6 +542,10 @@ public class RSNetworkCellInventory implements StorageCell {
     @Override
     public void getAvailableStacks(KeyCounter out) {
         if (out == null) {
+            return;
+        }
+        if (isInert) {
+            // 闲置单元：不向 AE2 暴露任何内容（避免与同网络主单元重复计入）。
             return;
         }
         try {
@@ -468,8 +598,13 @@ public class RSNetworkCellInventory implements StorageCell {
 
     @Override
     public long insert(AEKey key, long amount, Actionable mode, IActionSource source) {
-        // 单向桥接：AE 经此单元把物品写入 RS 网络。
-        if (amount <= 0 || key == null || !filter.test(key)) {
+        // 闲置单元：不写入（避免与同网络主单元重复计入）。
+        if (isInert) {
+            return 0;
+        }
+        // 单向桥接：AE 经此单元把物品写入 RS 网络。写入受 CellFilter.allowsInsert 限制
+        // （NON_STACKABLE 仅接受不可堆叠物品；读取范围 allowsRead 与此无关，详见 CellFilter）。
+        if (amount <= 0 || key == null || !filter.allowsInsert(key)) {
             return 0;
         }
         com.refinedmods.refinedstorage.api.resource.ResourceKey rsKey = KeyConverter.toRSKey(key);
@@ -520,7 +655,12 @@ public class RSNetworkCellInventory implements StorageCell {
 
     @Override
     public long extract(AEKey key, long amount, Actionable mode, IActionSource source) {
-        if (amount <= 0 || key == null || !filter.test(key)) {
+        // 闲置单元：不提取（避免与同网络主单元重复计入）。
+        if (isInert) {
+            return 0;
+        }
+        // 提取（把 RS 物品拉进 AE）属「读取」范畴：不受写入限制，两种类型都允许取出全部物品。
+        if (amount <= 0 || key == null || !filter.allowsRead(key)) {
             return 0;
         }
         com.refinedmods.refinedstorage.api.resource.ResourceKey rsKey = KeyConverter.toRSKey(key);
@@ -571,11 +711,17 @@ public class RSNetworkCellInventory implements StorageCell {
 
     @Override
     public Component getDescription() {
+        if (isInert) {
+            return Component.literal("RS Network Cell (闲置: 同网络已被占用)");
+        }
         return Component.literal("RS Network Cell (" + filter.name().toLowerCase() + ")");
     }
 
     @Override
     public CellState getStatus() {
+        if (isInert) {
+            return CellState.EMPTY;
+        }
         if (bound == null || network == null) {
             return CellState.EMPTY;
         }
@@ -600,6 +746,11 @@ public class RSNetworkCellInventory implements StorageCell {
             }
         } catch (Throwable t) {
             LOGGER.warn("[rs2ae_cell] persist 移除监听失败（已忽略）", t);
+        }
+        // 单元从网格卸载：释放同网络主单元身份，使同网络其它单元可接管。
+        if (isPrimary) {
+            releaseClaim();
+            isPrimary = false;
         }
     }
 
