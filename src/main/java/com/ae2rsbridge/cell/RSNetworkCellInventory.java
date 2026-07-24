@@ -26,7 +26,6 @@ import com.refinedmods.refinedstorage.common.api.support.network.NetworkNodeCont
 import com.refinedmods.refinedstorage.neoforge.api.RefinedStorageNeoForgeApi;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceKey;
@@ -34,7 +33,6 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.neoforged.neoforge.server.ServerLifecycleHooks;
 import org.jetbrains.annotations.Nullable;
@@ -272,13 +270,6 @@ public class RSNetworkCellInventory implements StorageCell {
     private boolean isPrimary = false;
     /** 是否闲置：欲抢占但同网络已被另一主单元占用。闲置单元不读不写不监听，避免 AE2 双计数。 */
     private boolean isInert = false;
-    /**
-     * 宿主是否为 ME IO 端口。ME IO 端口的「导出」语义会把单元格内容抽出来倒进 AE 网络；
-     * 本单元格是通往 RS 的实时窗口，一旦被导出就会把 RS 物品抽干，而 AE 网络若无其它真实存储
-     * 则物品无处分流 → 进虚空。故宿主为 ME IO 端口时，extract/getAvailableStacks 一律返回空，
-     * 使其无法抽干 RS（详见 {@link #extract} 与 {@link #getAvailableStacks} 中的 isIOPortHost 守卫）。
-     */
-    private final boolean isIOPortHost;
 
     public RSNetworkCellInventory(ItemStack is, @Nullable ISaveProvider host) {
         this.host = host;
@@ -290,16 +281,18 @@ public class RSNetworkCellInventory implements StorageCell {
                 ? RSNetworkStorageCellItem.getFilter(is) : CellFilter.ALL;
         // AE2 把驱动器包成 ISaveProvider lambda 传进来；从中反射出驱动器网格节点，供 requestUpdate 推刷新。
         this.gridNode = extractGridNode(host);
-        // 判定宿主是否为 ME IO 端口：是则禁止其「导出」抽干 RS（防物品进虚空，见 isIOPortHost 守卫）。
-        this.isIOPortHost = isHostIOPort(host);
-        // 预览单元（host==null，非网格上下文，如物品渲染）不参与同网络主单元抢占，也不应成为主单元。
+        // 预览单元（host==null）：AE2 的 ME IO 端口调用 StorageCells.getCellInventory(cell, null) 时
+        // host 即为 null（见 AE2 IOPortBlockEntity.transferContents 第 286 行），故「处于 ME IO 端口」
+        // ⇔ host==null ⇔ isPreview。预览单元不接入网格、不参与同网络主单元抢占；且其 getAvailableStacks
+        // / extract 一律返回空（见下方守卫），ME IO 端口便无法把它当成普通单元格抽干 RS（防物品进虚空）。
+        // 普通驱动器 / ME 箱传进来的 host 非 null，不受影响。
         this.isPreview = (host == null);
         if (!isPreview) {
             tryClaim();
         }
-        LOGGER.debug("[rs2ae_cell] cell constructed; bound={}, dim={}, host={}, gridNode={}, primary={}, inert={}, ioPort={}",
+        LOGGER.debug("[rs2ae_cell] cell constructed; bound={}, dim={}, host={}, gridNode={}, primary={}, inert={}, preview={}",
                 bound, dimLoc, host != null ? host.getClass().getSimpleName() : "null",
-                gridNode != null ? "ok" : "null", isPrimary, isInert, isIOPortHost);
+                gridNode != null ? "ok" : "null", isPrimary, isInert, isPreview);
         // 立刻尝试解析（若在服务端线程且维度已加载）；否则入队由 tick 重试。
         MinecraftServer server = ServerLifecycleHooks.getCurrentServer();
         if (server != null) {
@@ -339,47 +332,6 @@ public class RSNetworkCellInventory implements StorageCell {
             LOGGER.warn("[rs2ae_cell] 无法从 host 反射出驱动器网格节点（推刷新将降级为挂载/操作时触发）", t);
         }
         return null;
-    }
-
-    /**
-     * 判断宿主是否为 ME IO 端口（{@code IOPortBlockEntity}）。
-     * ME IO 端口的「导出」语义会把单元格内容抽出来倒进 AE 网络；本单元格是通往 RS 的实时窗口，
-     * 一旦被导出就会把 RS 物品抽干，而 AE 网络若无其它真实存储则物品无处分流 → 进虚空。故对 ME IO 端口宿主
-     * 禁抽（详见 {@link #extract}/{@link #getAvailableStacks} 中的 isIOPortHost 守卫）。
-     * <p>
-     * 复用 {@link #extractGridNode} 的反射思路：从 host lambda 取出被捕获的
-     * {@link IGridConnectedBlockEntity}（即宿主方块实体），据其方块注册名 / 类名判定是否为 IO 端口。
-     */
-    private static boolean isHostIOPort(@Nullable ISaveProvider host) {
-        if (host == null) {
-            return false;
-        }
-        try {
-            for (Field f : host.getClass().getDeclaredFields()) {
-                if (IGridConnectedBlockEntity.class.isAssignableFrom(f.getType())) {
-                    f.setAccessible(true);
-                    Object captured = f.get(host);
-                    if (captured instanceof BlockEntity be) {
-                        Block blk = be.getBlockState().getBlock();
-                        ResourceLocation rl = BuiltInRegistries.BLOCK.getKey(blk);
-                        String path = rl.getPath();
-                        // AE2 的 ME IO 端口方块注册名含 "io_port"（如 ae2:io_port）。
-                        if (path.contains("io_port") || path.contains("ioport")) {
-                            return true;
-                        }
-                        // 兜底：按方块实体类名判定（AE2 的 ME IO 端口类名含 IOPort）。
-                        String cn = be.getClass().getSimpleName();
-                        if (cn.contains("IOPort") || cn.contains("IoPort")) {
-                            return true;
-                        }
-                    }
-                }
-            }
-        } catch (Throwable t) {
-            // 反射失败：保守按非 IO 端口处理（仅失去防导出保护，不阻断其它功能）。
-            LOGGER.debug("[rs2ae_cell] 无法从 host 反射判定 ME IO 端口（按普通单元格处理）", t);
-        }
-        return false;
     }
 
     private void resolveNetwork(@Nullable MinecraftServer server) {
@@ -599,8 +551,9 @@ public class RSNetworkCellInventory implements StorageCell {
         if (out == null) {
             return;
         }
-        // ME IO 端口导出保护：对其暴露为空，ME IO 端口便不会尝试导出（避免抽干 RS 进虚空）。
-        if (isIOPortHost) {
+        // ME IO 端口导出保护：ME IO 端口以 host==null（即 isPreview）调用本单元。对其暴露为空，
+        // ME IO 端口便不会尝试导出（避免把 RS 抽干进虚空）。普通驱动器 / ME 箱 host 非 null，正常暴露。
+        if (isPreview) {
             return;
         }
         if (isInert) {
@@ -732,10 +685,11 @@ public class RSNetworkCellInventory implements StorageCell {
         if (isInert) {
             return 0;
         }
-        // ME IO 端口导出保护：本单元格是通往 RS 的窗口，被 ME IO 端口导出会把 RS 抽干且物品进虚空。
-        // 宿主为 ME IO 端口时一律拒绝抽取（SIMULATE / MODULATE 都不抽），RS 物品安全留在 RS。
-        if (isIOPortHost) {
-            LOGGER.debug("[rs2ae_cell] ME IO 端口尝试抽取 RS 内容；已拒绝对 RS 网络的抽干（防物品进虚空）");
+        // ME IO 端口导出保护：本单元格是通往 RS 的实时窗口。ME IO 端口以 host==null（即 isPreview）调用本单元，
+        // 此时一律拒绝抽取（SIMULATE / MODULATE 都不抽），RS 物品安全留在 RS，避免被「导出」语义抽干、
+        // 且因 AE 网络无真实存储而进虚空。普通 AE 网络读取（终端取放）宿主非 null，不受影响。
+        if (isPreview) {
+            LOGGER.debug("[rs2ae_cell] 预览/ME IO 端口上下文尝试抽取 RS 内容；已拒绝对 RS 网络的抽干（防物品进虚空）");
             return 0;
         }
         // 提取（把 RS 物品拉进 AE）属「读取」范畴：不受写入限制，两种类型都允许取出全部物品。
