@@ -286,7 +286,7 @@ public class RSNetworkCellInventory implements StorageCell {
         if (!isPreview) {
             tryClaim();
         }
-        LOGGER.info("[rs2ae_cell] cell constructed; bound={}, dim={}, host={}, gridNode={}, primary={}, inert={}",
+        LOGGER.debug("[rs2ae_cell] cell constructed; bound={}, dim={}, host={}, gridNode={}, primary={}, inert={}",
                 bound, dimLoc, host != null ? host.getClass().getSimpleName() : "null",
                 gridNode != null ? "ok" : "null", isPrimary, isInert);
         // 立刻尝试解析（若在服务端线程且维度已加载）；否则入队由 tick 重试。
@@ -627,17 +627,21 @@ public class RSNetworkCellInventory implements StorageCell {
                 return 0;
             }
         }
-        // 真实写入（MODULATE）：RS 的 CompositeStorageImpl 在删除/新增物品后做内部簿记时（line 112）会抛
-        // ConcurrentModificationException，而物品在异常抛出前已写入 RS。若直接 try/catch 返回 0，会导致
-        // 「RS 已收到物品、AE 却以为没写入」→ AE 不扣减自身库存 → <b>重复计数</b>。
-        // 正确做法：先用 SIMULATE 探明可写入量 sim，再 EXECUTE；无论成功还是抛 CME 都按 sim 上报
-        // （物品确实已进入 RS），AE 据此扣减、RS 据此增加 → 不重复。
+        // 真实写入（MODULATE）——按<b>实测库存变化量</b>上报，物理守恒，杜绝虚空消失/重复：
+        // RS 的 CompositeStorageImpl 在写入后做内部簿记时可能抛 ConcurrentModificationException，
+        // 此时物品可能只写入了一部分、甚至没写入。旧实现「无论成败都按 SIMULATE 的 sim 上报」是错的——
+        // insert 返回值是「AE 应从自身库存扣减的数量」；若 EXECUTE 中途 CME 导致实际只写入部分/未写入，
+        // AE 却按全额 sim 扣减，就会「AE 扣了、RS 没收到」→ 物品凭空消失。
+        // 正确做法：EXECUTE 前记 before=get(key)，EXECUTE 后记 after，用 (after-before) 作为真正进入 RS
+        // 的数量上报；AE 只扣这么多，与 RS 实际增量严格一致 → 绝不丢、绝不重复。
         try {
             RootStorage r = getRoot();
             if (r == null) {
                 return 0;
             }
             int size = (int) Math.min(amount, Integer.MAX_VALUE);
+            long before = r.get(rsKey);
+            // 先 SIMULATE 探明 RS 能否接收（满了则直接返回 0，不触碰 EXECUTE，避免无谓的 CME 风险）。
             long sim = r.insert(rsKey, size, Action.SIMULATE, AE_ACTOR);
             if (sim <= 0) {
                 return 0;
@@ -645,11 +649,21 @@ public class RSNetworkCellInventory implements StorageCell {
             try {
                 r.insert(rsKey, (int) sim, Action.EXECUTE, AE_ACTOR);
             } catch (Throwable t) {
-                LOGGER.warn("[rs2ae_cell] insert(EXECUTE) 触发 RS 内部 ConcurrentModificationException；"
-                        + "按已写入量 {} 上报（物品已写入 RS，未重复）", sim);
+                LOGGER.warn("[rs2ae_cell] insert(EXECUTE) 触发 RS 内部异常；改按实测库存变化量上报（不丢不重）", t);
             }
-            markDirtyAndNotify();
-            return sim;
+            RootStorage r2 = getRoot();
+            long after = (r2 != null) ? r2.get(rsKey) : before;
+            long actual = after - before;
+            if (actual < 0) {
+                actual = 0;        // 库存反常减少：不上报负数
+            }
+            if (actual > size) {
+                actual = size;     // 保护：不超过本次请求量
+            }
+            if (actual > 0) {
+                markDirtyAndNotify();
+            }
+            return actual;
         } catch (Throwable t) {
             LOGGER.error("[rs2ae_cell] insert 失败；返回 0", t);
             return 0;
@@ -683,29 +697,46 @@ public class RSNetworkCellInventory implements StorageCell {
                 return 0;
             }
         }
-        // 真实删除（MODULATE）：RS 的 CompositeStorageImpl.extract 在删除物品、做内部簿记时（line 112）
-        // 会抛 ConcurrentModificationException——而物品在异常抛出前已被删除。若这里直接 try/catch 返回 0，
-        // 会导致「RS 物品已消失、AE 却以为没拿到」的<b>凭空丢失</b>（ME IO 端口批量导入 RS→AE 时正是此症状）。
-        // 正确做法：先用 SIMULATE 探明可提取量 sim，再 EXECUTE；无论 EXECUTE 成功还是抛 CME，
-        // 都按 sim 上报（物品确实已离开 RS），AE 据此入账 → 不丢物品。
+        // 真实删除（MODULATE）——按<b>实测库存变化量</b>上报，物理守恒，杜绝虚空消失/重复：
+        // RS 的 CompositeStorageImpl.extract 在删除物品、做内部簿记时可能抛 ConcurrentModificationException，
+        // 此时物品可能只删了一部分、甚至没删。旧实现「无论成败都按 SIMULATE 的 sim 上报」是错的——
+        // 它假设 EXECUTE 一定完整删除了 sim 个，一旦 CME 中途抛出导致部分/未删除，AE 却按全额 sim 入账，
+        // 就会 AE 与 RS 账目不平 →「凭空消失」或「凭空多出」。
+        // 正确做法：EXECUTE 前用 RootStorage.get(key) 记下真实库存 before，EXECUTE 后再取 after，
+        // 用 (before-after) 作为真正离开 RS 的数量上报给 AE。服务端单线程，before/after 夹住单次
+        // EXECUTE 之间没有其它代码运行，delta 精确等于本次操作的实际效果，绝不会丢/重。
         try {
             RootStorage r = getRoot();
             if (r == null) {
                 return 0;
             }
             int size = (int) Math.min(amount, Integer.MAX_VALUE);
-            long sim = r.extract(rsKey, size, Action.SIMULATE, AE_ACTOR);
-            if (sim <= 0) {
+            long before = r.get(rsKey);
+            if (before <= 0) {
+                return 0;
+            }
+            int want = (int) Math.min((long) size, before);
+            if (want <= 0) {
                 return 0;
             }
             try {
-                r.extract(rsKey, (int) sim, Action.EXECUTE, AE_ACTOR);
+                r.extract(rsKey, want, Action.EXECUTE, AE_ACTOR);
             } catch (Throwable t) {
-                LOGGER.warn("[rs2ae_cell] extract(EXECUTE) 触发 RS 内部 ConcurrentModificationException；"
-                        + "按已提取量 {} 上报（物品已离开 RS，未丢失）", sim);
+                LOGGER.warn("[rs2ae_cell] extract(EXECUTE) 触发 RS 内部异常；改按实测库存变化量上报（不丢不重）", t);
             }
-            markDirtyAndNotify();
-            return sim;
+            RootStorage r2 = getRoot();
+            long after = (r2 != null) ? r2.get(rsKey) : before;
+            long actual = before - after;
+            if (actual < 0) {
+                actual = 0;        // 库存反常增加：不上报负数
+            }
+            if (actual > want) {
+                actual = want;     // 保护：不超过本次请求量
+            }
+            if (actual > 0) {
+                markDirtyAndNotify();
+            }
+            return actual;
         } catch (Throwable t) {
             LOGGER.error("[rs2ae_cell] extract 失败；返回 0", t);
             return 0;

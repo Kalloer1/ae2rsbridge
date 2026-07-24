@@ -25,11 +25,12 @@ public class RSNetworkCellHandler implements ICellHandler {
     @Override
     public StorageCell getCellInventory(ItemStack is, @Nullable ISaveProvider host) {
         // 未绑定的单元完全惰性：不注册为存储源，绝不干扰 AE 网络。
+        // 注意：本方法在客户端渲染线程也会被高频调用（物品在手/GUI 渲染），故用 debug 避免刷屏。
         if (RSNetworkStorageCellItem.getBoundRsBlock(is) == null) {
-            LOGGER.info("[rs2ae_cell] getCellInventory: 单元未绑定，返回 null（不接入网格）");
+            LOGGER.debug("[rs2ae_cell] getCellInventory: 单元未绑定，返回 null（不接入网格）");
             return null;
         }
-        LOGGER.info("[rs2ae_cell] getCellInventory: 已绑定单元，创建 RS 网络存储（host={}）",
+        LOGGER.debug("[rs2ae_cell] getCellInventory: 已绑定单元，创建 RS 网络存储（host={}）",
                 host != null ? host.getClass().getSimpleName() : "null");
         return new RSNetworkCellInventory(is, host);
     }
